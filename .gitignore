@@ -1,0 +1,19 @@
+# Ignore data folder contents
+data/*
+!data/.gitkeep
+
+# Node modules
+node_modules/
+
+# Java build output
+target/
+
+# Environment files
+.env
+
+# macOS junk
+.DS_Store
+
+# Editor junk
+.idea/
+.vscode/
