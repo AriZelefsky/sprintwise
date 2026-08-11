@@ -17,7 +17,7 @@ Ever got stuck waiting 59 minutes for the next train, wishing Google Maps would 
 ## Setup 
 
 ### 0. Prerequisites
-- Java 17+ and Maven (backend)
+- Java 25+ and Maven (backend)
 - Node.js and npm (frontend)
 - `curl` and `unzip` (used by the data download script)
 
