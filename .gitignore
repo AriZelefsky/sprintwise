@@ -2,6 +2,10 @@
 data/*
 !data/.gitkeep
 
+# --- OTP (downloaded binary + generated graph) ---
+otp/*.jar
+otp/graph.obj
+
 # Node modules
 node_modules/
 

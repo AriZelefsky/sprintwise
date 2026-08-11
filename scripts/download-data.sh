@@ -79,10 +79,16 @@ fi
 # --- Print results ---
 echo ""
 if [ ${#success_list[@]} -gt 0 ]; then
-  echo "Successfully set up: ${success_list[*]}"
+  echo "Successfully set up:"
+  for item in "${success_list[@]}"; do
+    printf "\t%s\n" "$item"
+  done
 fi
 
 if [ ${#failure_list[@]} -gt 0 ]; then
-  echo "Failed to download: ${failure_list[*]}"
+  echo "Failed to download:"
+  for item in "${failure_list[@]}"; do
+    printf "\t%s\n" "$item"
+  done
   exit 1
 fi
