@@ -59,27 +59,40 @@ else
   fi
 fi
 
-# --- GTFS subway feed ---
-if [ -d "data/gtfs_subway" ] && [ "$(ls -A data/gtfs_subway 2>/dev/null)" ]; then
-  echo "GTFS subway data already exists, skipping download."
-  success_list+=("gtfs_subway (already present)")
-else
-  if curl -L -o data/gtfs_subway.zip https://rrgtfsfeeds.s3.amazonaws.com/gtfs_subway.zip; then
-    if unzip -t data/gtfs_subway.zip > /dev/null 2>&1; then
-      mkdir -p data/gtfs_subway
-      unzip -q data/gtfs_subway.zip -d data/gtfs_subway
-      rm data/gtfs_subway.zip
-      success_list+=("gtfs_subway.zip")
+# --- GTFS feeds ---
+download_gtfs_feed() {
+  local name="$1"
+  local url="$2"
+  local dest_dir="$3"
+  local zip_file="${dest_dir}.zip"
+
+  if [ -d "$dest_dir" ] && [ "$(ls -A "$dest_dir" 2>/dev/null)" ]; then
+    echo "GTFS $name data already exists, skipping download."
+    success_list+=("$name (already present)")
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$dest_dir")"
+
+  if curl -L -o "$zip_file" "$url"; then
+    if unzip -t "$zip_file" > /dev/null 2>&1; then
+      mkdir -p "$dest_dir"
+      unzip -q "$zip_file" -d "$dest_dir"
+      rm "$zip_file"
+      success_list+=("$name")
     else
-      echo "Error: GTFS zip file is invalid."
-      rm -f data/gtfs_subway.zip
+      echo "Error: GTFS zip file for $name is invalid."
+      rm -f "$zip_file"
       exit 1
     fi
   else
-    echo "Error: GTFS download failed (curl error)."
-    failure_list+=("gtfs_subway.zip")
+    echo "Error: GTFS download failed for $name (curl error)."
+    failure_list+=("$name")
   fi
-fi
+}
+
+download_gtfs_feed "mta" "https://rrgtfsfeeds.s3.amazonaws.com/gtfs_subway.zip" "data/gtfs/mta"
+download_gtfs_feed "lirr" "https://rrgtfsfeeds.s3.amazonaws.com/gtfslirr.zip" "data/gtfs/lirr"
 
 # --- OTP jar ---
 OTP_VERSION="2.9.0"

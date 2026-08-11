@@ -31,7 +31,7 @@ cd sprintwise
 ```bash
 ./scripts/download-data.sh
 ```
-This downloads the NY state OpenStreetMap extract temporarily, clips it to the NYC + Long Island metro area, and saves it as `data/nyc-metro.osm.pbf`. It also downloads the MTA subway GTFS feed into `data/`. See `data/README.md` for details on what's included.
+This downloads the NY state OpenStreetMap extract temporarily, clips it to the NYC + Long Island metro area, and saves it as `data/nyc-metro.osm.pbf`. It also downloads MTA subway and LIRR GTFS feeds into `data/gtfs/`. See `data/README.md` for details on what's included.
 
 ### 3. Backend setup
 ```bash
@@ -45,5 +45,8 @@ cd frontend
 npm install
 ```
 
-### 5. Run
-*(fill in once you have actual run commands for OTP + backend + frontend)*
+### 5. Build and run OTP
+```bash
+./scripts/run-otp.sh      # one-time graph build (re-run when data changes)
+./scripts/start-otp.sh    # start routing server at http://localhost:8080
+```
