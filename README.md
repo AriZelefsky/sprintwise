@@ -11,7 +11,7 @@ Maybe the normal route has you walking to the subway, missing a train by a minut
 
 Under the hood, we built the routing engine largely from scratch. Streets, stops, transfers, and transit connections are modeled as a multimodal graph, and routes are found using a modified Dijkstra-style shortest path algorithm. We extended the normal shortest path problem into a resource-constrained one, so the algorithm can reason about walking at different speeds, limited amounts of sprinting, scheduled departures, and whether spending some of that sprint time now unlocks a significantly faster route later. GTFS and GTFS-Realtime data supply the transit network, schedules, and live updates, while our own routing logic determines how to actually get from point A to point B.
 
-Ever looked at a route and thought, “I could definitely make that train if I just ran”? That is exactly the problem SprintWise is built to solve.
+Ever got stuck waiting 59 minutes for the next train, wishing Google Maps would have just told you to sprint to catch the train that departed moments ago? Splitwise is there for you.
 
 
 ## Setup 
