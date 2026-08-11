@@ -10,23 +10,52 @@ mkdir -p otp
 success_list=()
 failure_list=()
 
-# --- OSM extract ---
-if [ -f "data/new-york-latest.osm.pbf" ]; then
-  echo "OSM file already exists, skipping download."
-  success_list+=("new-york-latest.osm.pbf (already present)")
+# --- OSM extract (NYC + Long Island clip) ---
+OSM_OUT="data/nyc-metro.osm.pbf"
+OSM_TEMP="data/.new-york-state-temp.osm.pbf"
+OSM_URL="https://download.geofabrik.de/north-america/us/new-york-latest.osm.pbf"
+# min_lon,min_lat,max_lon,max_lat
+BBOX="-74.05,40.50,-71.85,41.05"
+
+if [ -f "$OSM_OUT" ]; then
+  echo "OSM metro extract already exists, skipping download."
+  success_list+=("nyc-metro.osm.pbf (already present)")
 else
-  if curl -L -o data/new-york-latest.osm.pbf https://download.geofabrik.de/north-america/us/new-york-latest.osm.pbf; then
-    osm_size=$(wc -c < "data/new-york-latest.osm.pbf")
-    if [ "$osm_size" -gt 1048576 ]; then
-      success_list+=("new-york-latest.osm.pbf")
-    else
-      echo "Error: OSM file is smaller than expected. Download may have failed."
-      rm -f data/new-york-latest.osm.pbf
+  if ! command -v osmium >/dev/null 2>&1; then
+    echo "Error: osmium-tool is required. Install with: brew install osmium-tool"
+    exit 1
+  fi
+
+  cleanup_temp() {
+    rm -f "$OSM_TEMP"
+  }
+  trap cleanup_temp EXIT
+
+  echo "Downloading NY state OSM (temporary, for clipping)..."
+  if curl -L -o "$OSM_TEMP" "$OSM_URL"; then
+    temp_size=$(wc -c < "$OSM_TEMP")
+    if [ "$temp_size" -le 1048576 ]; then
+      echo "Error: OSM download is smaller than expected. Download may have failed."
       exit 1
     fi
   else
     echo "Error: OSM download failed (curl error)."
-    failure_list+=("new-york-latest.osm.pbf")
+    failure_list+=("nyc-metro.osm.pbf")
+    exit 1
+  fi
+
+  echo "Clipping to NYC + Long Island bbox..."
+  osmium extract -b "$BBOX" "$OSM_TEMP" -o "$OSM_OUT"
+  cleanup_temp
+  trap - EXIT
+
+  osm_size=$(wc -c < "$OSM_OUT")
+  if [ "$osm_size" -gt 1048576 ]; then
+    success_list+=("nyc-metro.osm.pbf")
+  else
+    echo "Error: Clipped OSM file is smaller than expected. Clip may have failed."
+    rm -f "$OSM_OUT"
+    exit 1
   fi
 fi
 

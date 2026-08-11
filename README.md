@@ -19,7 +19,7 @@ Ever got stuck waiting 59 minutes for the next train, wishing Google Maps would 
 ### 0. Prerequisites
 - Java 25+ and Maven (backend)
 - Node.js and npm (frontend)
-- `curl` and `unzip` (used by the data download script)
+- `curl`, `unzip`, and `osmium-tool` (used by the data download script; install osmium with `brew install osmium-tool`)
 
 ### 1. Clone the repo
 ```bash
@@ -31,7 +31,7 @@ cd sprintwise
 ```bash
 ./scripts/download-data.sh
 ```
-This downloads the OpenStreetMap extract for New York state and the MTA subway GTFS feed into `data/`. See `data/README.md` for details on what's included.
+This downloads the NY state OpenStreetMap extract temporarily, clips it to the NYC + Long Island metro area, and saves it as `data/nyc-metro.osm.pbf`. It also downloads the MTA subway GTFS feed into `data/`. See `data/README.md` for details on what's included.
 
 ### 3. Backend setup
 ```bash

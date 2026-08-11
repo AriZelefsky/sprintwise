@@ -16,11 +16,11 @@ if [ ! -f "$JAR" ]; then
   exit 1
 fi
 
-if [ ! -f "$DATA_DIR/new-york-latest.osm.pbf" ]; then
+if [ ! -f "$DATA_DIR/nyc-metro.osm.pbf" ]; then
   echo "Error: OSM data not found in $DATA_DIR. Run the setup/download script first."
   exit 1
 fi
 
-java -Xmx2G -jar "$JAR" --build --save "$DATA_DIR"
+java -Xmx4G -jar "$JAR" --build --save "$DATA_DIR"
 
 echo "Graph generation completed successfully."
