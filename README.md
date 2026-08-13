@@ -57,6 +57,11 @@ cd backend
 mvn install
 ```
 
+Run the normal synthetic/unit suite with `mvn test`. To also build and measure the
+complete frozen MTA timetable index in a separate Java process capped at 2 GiB,
+run `mvn verify -Preal-mta-index`. The optional integration test skips itself when
+`data/gtfs/mta/` is unavailable.
+
 ### 4. Frontend setup
 ```bash
 cd frontend
