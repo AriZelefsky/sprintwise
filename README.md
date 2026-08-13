@@ -17,7 +17,7 @@ Ever got stuck waiting 59 minutes for the next train, wishing Google Maps would 
 ## Setup 
 
 ### 0. Prerequisites
-- Java 25+ and Maven (backend)
+- JDK 25 and Maven (backend and OTP; use Java 25 consistently rather than a different major version)
 - Node.js and npm (frontend)
 - `curl`, `unzip`, and `osmium-tool` (used by the data download script; install osmium with `brew install osmium-tool`)
 
@@ -34,6 +34,16 @@ cd sprintwise
 This downloads the NY state OpenStreetMap extract temporarily, clips it to the NYC + Long Island metro area, and saves it as `data/nyc-metro.osm.pbf`. It also downloads MTA subway and LIRR GTFS feeds into `data/gtfs/`. See `data/README.md` for details on what's included.
 
 ### 3. Backend setup
+
+Confirm that both the shell and Maven are using Java 25:
+
+```bash
+java --version
+mvn --version
+```
+
+Both commands must report Java 25. The repository's `.java-version`, Maven compiler target, and Maven Enforcer rule all pin this requirement.
+
 ```bash
 cd backend
 mvn install

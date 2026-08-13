@@ -8,6 +8,10 @@
 
 set -e
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/require-java-25.sh"
+require_java_25
+
 JAR="otp/otp-shaded-2.9.0.jar"
 DATA_DIR="data"
 

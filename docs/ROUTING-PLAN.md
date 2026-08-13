@@ -144,7 +144,7 @@ After search, compare:
 - `bestNoSprint` — best label at `END` with `sprintUsedSec == 0`
 - `bestAny` — best label at `END` overall
 
-Recommend sprint plan only if `bestNoSprint.arrival − bestAny.arrival ≥ minSprintPayoff` (configurable, e.g. 5 minutes). Otherwise return the no-sprint plan. Optionally strip per-leg sprints that do not change which train is boarded.
+Recommend sprint plan only if `bestNoSprint.arrival − bestAny.arrival ≥ minSprintPayoff` (configurable, e.g. 5 minutes). Otherwise return the no-sprint plan. Optionally strip per-leg sprints that do not change which train is boarded. Or even strip ones that only save as much time as was saved from moving faster (ie if sprinter took 3 min to traverse distance and walker took 9, and the sprinter only saved those 6 min, then he did not gain much by spinting, and only keep sprints where you A) save the time of traversing the walked distance faster and ALSO get a better or much earlier train (like sprinter took 3 min, then got immediate train, walker took 9 and then had to wait 2 min for train, the spinting was worth 2 min beside the value of the sprint over walk itself)
 
 ### RAPTOR rounds (sketch)
 
@@ -238,12 +238,12 @@ Each phase: **goal → build → done when → explicitly defer**.
 
 ### Phase 0 — Data and comparison baseline
 
-**Goal:** Confirm the fixed map/transit snapshot, align the backend toolchain, and get OTP running for manual checks.
+**Goal:** Confirm the fixed map/transit snapshot, align the entire Java toolchain on JDK 25, and get OTP running for manual checks.
 
 **Build:**
 
 - Verify that the existing fixed snapshot contains `data/nyc-metro.osm.pbf` and the MTA/LIRR GTFS feeds; do **not** rerun `scripts/download-data.sh`
-- Align the JDK used by `java`, Maven, and `backend/pom.xml` to one supported major version before writing backend code
+- Use JDK 25 for the backend, Maven runtime, and OTP 2.9; `backend/pom.xml` and the repository `.java-version` pin Java 25, and the OTP scripts reject other Java majors
 - If `data/graph.obj` already exists, use `./scripts/start-otp.sh` directly; run `./scripts/run-otp.sh` only when the graph is absent or an intentional future data refresh requires rebuilding it
 - Start OTP at `http://localhost:8080` for manual baseline checks
 - Create `docs/golden-queries.md` with ~10 representative trips (subway-only, transfer, LIRR, near-miss train scenarios)
@@ -253,7 +253,7 @@ Each phase: **goal → build → done when → explicitly defer**.
 - OTP returns sensible plans for all golden queries
 - Saved OTP JSON responses exist for regression comparison
 - The snapshot remains unchanged throughout subsequent phases
-- `java --version`, the Java runtime reported by `mvn --version`, and the Maven compiler target agree; a basic backend Maven test/build succeeds
+- `java --version` and the Java runtime reported by `mvn --version` both report Java 25; the Maven compiler target is 25 and a basic backend Maven test/build succeeds
 
 **Defer:** data refresh/live data, custom router, sprint, frontend
 
