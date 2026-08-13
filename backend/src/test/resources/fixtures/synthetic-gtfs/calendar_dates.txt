@@ -1,3 +1,4 @@
 service_id,date,exception_type
 SPECIAL,20260813,1
 DIRECT_CASE,20260813,1
+WEEKDAY,20260818,2

@@ -47,6 +47,7 @@ class GoldenFixtureIntegrityTest {
         assertTrue(stopTimes.contains("NIGHT,24:15:00,24:15:00,C,2"));
         assertTrue(calendarDates.contains("SPECIAL,20260813,1"));
         assertTrue(calendarDates.contains("DIRECT_CASE,20260813,1"));
+        assertTrue(calendarDates.contains("WEEKDAY,20260818,2"));
     }
 
     @Test

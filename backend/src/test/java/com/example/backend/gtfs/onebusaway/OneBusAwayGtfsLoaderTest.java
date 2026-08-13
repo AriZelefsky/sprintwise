@@ -43,7 +43,7 @@ class OneBusAwayGtfsLoaderTest {
         assertEquals(8, feed.trips().size());
         assertEquals(16, feed.stopTimes().size());
         assertEquals(2, feed.serviceCalendars().size());
-        assertEquals(2, feed.serviceCalendarDates().size());
+        assertEquals(3, feed.serviceCalendarDates().size());
 
         assertTrue(feed.stops().stream().allMatch(stop -> stop.id().feedId().equals(FEED_ID)));
         assertTrue(feed.routes().stream().allMatch(route -> route.id().feedId().equals(FEED_ID)));

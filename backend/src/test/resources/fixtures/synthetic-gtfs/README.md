@@ -16,5 +16,11 @@ The feed also contains:
 - `NIGHT`, whose times are greater than `24:00:00`.
 - `SPECIAL_ONLY`, enabled only by `calendar_dates.txt` on 2026-08-13.
 - `WEEKEND_ONLY`, enabled by the weekend service calendar.
+- `WEEKDAY` service removed by `calendar_dates.txt` on Tuesday, 2026-08-18.
+
+The August fixture does not cross a daylight-saving transition. SprintWise follows
+GTFS time semantics on transition days: service-day time zero is local noon minus
+twelve elapsed hours in the agency timezone. Dedicated unit tests cover both New
+York clock changes without making the synthetic feed span additional months.
 
 Expected journeys are documented in `docs/golden-queries.md`.
