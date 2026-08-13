@@ -1,0 +1,6 @@
+stop_id,stop_name,stop_lat,stop_lon,location_type,parent_station
+A,Alpha,40.0000,-74.0000,0,
+B_STATION,Beta Station,40.0010,-74.0000,1,
+B_RED,Beta Red Platform,40.0010,-74.0000,0,B_STATION
+B_BLUE,Beta Blue Platform,40.0011,-74.0000,0,B_STATION
+C,Charlie,40.0020,-74.0000,0,

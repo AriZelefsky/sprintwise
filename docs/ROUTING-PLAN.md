@@ -220,13 +220,17 @@ Implications:
 
 ## Golden queries
 
-Before and after each phase, maintain a fixed set of test queries (origin, destination, depart time, notes). Store in `docs/golden-queries.md` (create when starting Phase 0).
+Before and after each phase, maintain the two fixed suites described in `docs/golden-queries.md`:
+
+- **Frozen NYC integration goldens** use the fixed OSM/GTFS snapshot and normalized OTP reference results. They prove realism and catch full-stack regressions without comparing irrelevant raw JSON fields.
+- **Synthetic exact-answer goldens** use a tiny GTFS fixture plus mocked footpaths. They force schedule and sprint cases that may not occur reliably in NYC and support exact assertions for trip IDs, arrival seconds, sprint usage, calendar behavior, and label dominance.
 
 Every phase ends by running these queries and recording:
 
 - Does the engine return a plausible itinerary?
 - How does it compare to OTP (qualitatively)?
 - Any snap-distance warnings?
+- Do all synthetic cases enabled by this phase match their exact expected answers?
 
 ---
 
@@ -246,12 +250,13 @@ Each phase: **goal → build → done when → explicitly defer**.
 - Use JDK 25 for the backend, Maven runtime, and OTP 2.9; `backend/pom.xml` and the repository `.java-version` pin Java 25, and the OTP scripts reject other Java majors
 - If `data/graph.obj` already exists, use `./scripts/start-otp.sh` directly; run `./scripts/run-otp.sh` only when the graph is absent or an intentional future data refresh requires rebuilding it
 - Start OTP at `http://localhost:8080` for manual baseline checks
-- Create `docs/golden-queries.md` with ~10 representative trips (subway-only, transfer, LIRR, near-miss train scenarios)
+- Maintain `docs/golden-queries.md`, the normalized OTP baseline, and the synthetic GTFS/mock-footpath fixtures described there
 
 **Done when:**
 
 - OTP returns sensible plans for all golden queries
 - Saved OTP JSON responses exist for regression comparison
+- Synthetic fixture integrity tests pass and define exact answers for later routing phases
 - The snapshot remains unchanged throughout subsequent phases
 - `java --version` and the Java runtime reported by `mvn --version` both report Java 25; the Maven compiler target is 25 and a basic backend Maven test/build succeeds
 

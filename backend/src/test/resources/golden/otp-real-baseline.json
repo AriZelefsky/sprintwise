@@ -1,0 +1,80 @@
+{
+  "description": "Normalized OTP 2.9 results for the frozen SprintWise data snapshot",
+  "otpVersion": "2.9.0",
+  "timezone": "America/New_York",
+  "generatedAt": "2026-08-13",
+  "defaultArrivalToleranceSeconds": 300,
+  "cases": [
+    {
+      "id": "NYC-01",
+      "departAt": "2026-08-13T08:00:00-04:00",
+      "origin": { "lat": 40.889248, "lon": -73.898583 },
+      "destination": { "lat": 40.755290, "lon": -73.987495 },
+      "expected": { "status": "FOUND", "start": "08:02:00", "end": "08:43:00", "transfers": 0, "legs": ["SUBWAY:1"] }
+    },
+    {
+      "id": "NYC-02",
+      "departAt": "2026-08-13T08:00:00-04:00",
+      "origin": { "lat": 40.759600, "lon": -73.830030 },
+      "destination": { "lat": 40.712582, "lon": -74.009781 },
+      "expected": { "status": "FOUND", "start": "08:05:30", "end": "08:54:00", "transfers": 1, "legs": ["SUBWAY:7X", "WALK", "SUBWAY:E"] }
+    },
+    {
+      "id": "NYC-03",
+      "departAt": "2026-08-13T10:00:00-04:00",
+      "origin": { "lat": 40.577422, "lon": -73.981233 },
+      "destination": { "lat": 40.759600, "lon": -73.830030 },
+      "expected": { "status": "FOUND", "start": "10:03:00", "end": "11:39:00", "transfers": 3, "legs": ["SUBWAY:Q", "SUBWAY:B", "SUBWAY:F", "WALK", "SUBWAY:7"] }
+    },
+    {
+      "id": "NYC-04",
+      "departAt": "2026-08-13T10:00:00-04:00",
+      "origin": { "lat": 40.580903, "lon": -73.835592 },
+      "destination": { "lat": 40.755290, "lon": -73.987495 },
+      "expected": { "status": "FOUND", "start": "10:09:00", "end": "11:47:12", "transfers": 1, "legs": ["SUBWAY:S", "SUBWAY:A", "WALK"] }
+    },
+    {
+      "id": "NYC-05",
+      "departAt": "2026-08-15T10:00:00-04:00",
+      "origin": { "lat": 40.868072, "lon": -73.919899 },
+      "destination": { "lat": 40.684460, "lon": -73.976890 },
+      "expected": { "status": "FOUND", "start": "10:02:05", "end": "11:07:01", "transfers": 1, "legs": ["WALK", "SUBWAY:1", "SUBWAY:2", "WALK"] }
+    },
+    {
+      "id": "NYC-06",
+      "departAt": "2026-08-15T00:05:00-04:00",
+      "origin": { "lat": 40.734789, "lon": -73.990730 },
+      "destination": { "lat": 40.675345, "lon": -73.903097 },
+      "expected": { "status": "FOUND", "start": "00:13:00", "end": "00:43:00", "transfers": 0, "legs": ["SUBWAY:L"] }
+    },
+    {
+      "id": "NYC-07",
+      "departAt": "2026-08-13T08:00:00-04:00",
+      "origin": { "lat": 40.75058844, "lon": -73.99358408 },
+      "destination": { "lat": 40.69960817, "lon": -73.80852987 },
+      "expected": { "status": "FOUND", "start": "08:05:00", "end": "08:26:00", "transfers": 0, "legs": ["RAIL"] }
+    },
+    {
+      "id": "NYC-08",
+      "departAt": "2026-08-13T08:00:00-04:00",
+      "origin": { "lat": 40.5901817, "lon": -73.66481822 },
+      "destination": { "lat": 40.75058844, "lon": -73.99358408 },
+      "expected": { "status": "FOUND", "start": "08:24:00", "end": "09:16:00", "transfers": 0, "legs": ["RAIL"] }
+    },
+    {
+      "id": "NYC-09",
+      "departAt": "2026-08-13T08:00:00-04:00",
+      "origin": { "lat": 41.04710896, "lon": -71.95388103 },
+      "destination": { "lat": 40.75058844, "lon": -73.99358408 },
+      "searchWindowSeconds": 21600,
+      "expected": { "status": "FOUND", "start": "11:29:00", "end": "14:53:00", "transfers": 1, "legs": ["RAIL", "RAIL"] }
+    },
+    {
+      "id": "NYC-10",
+      "departAt": "2026-08-13T08:00:00-04:00",
+      "origin": { "lat": 40.80808613, "lon": -73.10594023 },
+      "destination": { "lat": 40.755290, "lon": -73.987495 },
+      "expected": { "status": "FOUND", "start": "08:23:00", "end": "09:53:00", "transfers": 1, "legs": ["RAIL", "WALK", "SUBWAY:2"] }
+    }
+  ]
+}

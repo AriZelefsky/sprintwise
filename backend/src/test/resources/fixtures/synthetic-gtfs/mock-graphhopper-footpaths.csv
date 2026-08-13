@@ -1,0 +1,4 @@
+from_id,to_id,distance_m,kind
+START,A,240,ACCESS
+B_RED,B_BLUE,120,TRANSFER
+C,END,180,EGRESS

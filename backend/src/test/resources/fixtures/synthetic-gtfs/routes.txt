@@ -1,0 +1,4 @@
+route_id,agency_id,route_short_name,route_long_name,route_type
+RED,SYN,R,Red Test Line,1
+BLUE,SYN,B,Blue Test Line,1
+DIRECT,SYN,D,Direct Test Line,1
