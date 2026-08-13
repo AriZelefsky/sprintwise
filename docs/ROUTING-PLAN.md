@@ -1,6 +1,6 @@
 # SprintWise routing engine — build plan
 
-Custom **McRAPTOR** search in the Java backend. GraphHopper owns all walk distance and time. Custom GTFS indexing owns all transit rides. OTP is optional baseline/comparison only — not the search core.
+Custom **McRAPTOR** search in the Java backend. GraphHopper owns pedestrian pathfinding, distance, geometry, and snapping. SprintWise applies the user's configured walk and sprint speeds to those paths. Custom GTFS indexing owns all transit rides. OTP is optional baseline/comparison only — not the search core.
 
 Build incrementally. Each phase should compile, run, and pass its own checks before the next phase starts. Do not attempt the full stack in one pass.
 
@@ -14,10 +14,15 @@ A multimodal trip planner that finds **Pareto-optimal** journeys under:
 
 - **Elapsed / arrival time** — when you reach the destination
 - **Sprint budget** — seconds of sprinting spent so far (capped per trip)
-- **Sprint recharge** — progress toward recovering sprint capacity while riding transit
 - **Phase flag (`didWeJustWalk`)** — whether the last move was a walk (controls legal next moves)
 
 Walk legs are computed with **GraphHopper** on `data/nyc-metro.osm.pbf`. Ride legs come from **GTFS** schedules (`data/gtfs/mta/`, `data/gtfs/lirr/`). The search graph’s **nodes** are GTFS stops plus synthetic `START` and `END` — not every OSM street corner.
+
+For the initial implementation, sprint budget is **journey-wide and non-rechargeable**. Sprint seconds spent on an access, transfer, or egress walk remain spent for the rest of the journey; riding and waiting do not restore them. Recharge/recovery may be considered in a later post-MVP phase after the simpler sprint model is correct and performant.
+
+### Data snapshot policy
+
+The current OSM and GTFS files are a **fixed local snapshot** produced by the one-time data download. Do not rerun `scripts/download-data.sh` during normal development or silently replace these files: golden queries and regression results must continue to use this same snapshot. Deliberate static-data refreshes, GTFS-Realtime, and other live-data work are deferred until much later.
 
 ### What we are not building
 
@@ -64,19 +69,21 @@ Use these for **correctness patterns**, not copy-paste:
          │    data/nyc-metro   data/gtfs/
          │         .osm.pbf     mta/ lirr/
          ▼
-  Baseline T₀: OTP itinerary with walks re-priced on GraphHopper
+  Baseline T₀: OTP itinerary with walks re-routed by GraphHopper
+               and timed by SprintWise's speed model
 ```
 
 ### Single source of truth
 
 | Concern | Authority |
 |---------|-----------|
-| Walk meters and walk time | **GraphHopper** |
+| Pedestrian path, meters, geometry, and snapping | **GraphHopper** |
+| Walk and sprint duration on that path | **SprintWise speed model** (`vWalk`, `vSprint`) |
 | Ride times, trips, transfers (schedule) | **GTFS index** |
-| “Standard plan” skeleton | **OTP** (walk legs re-priced on GraphHopper → `T₀`) |
+| “Standard plan” skeleton | **OTP** (walk legs re-routed by GraphHopper and timed by SprintWise → `T₀`) |
 | Optimal sprint-aware plan | **McRAPTOR engine** |
 
-Never compare OTP walk meters to GraphHopper walk meters directly. Reprice OTP walks through GraphHopper before using OTP as a baseline.
+Never compare OTP walk meters or durations to SprintWise results directly. Re-route each OTP walk through GraphHopper, then calculate its normal-walk duration using the same `vWalk` used by SprintWise before treating it as a baseline.
 
 ---
 
@@ -107,14 +114,13 @@ Each label is a non-dominated point in criteria space:
 Label {
   arrivalTime:      Instant or seconds since midnight
   sprintUsedSec:    int      // cumulative sprint seconds spent
-  sprintRecharge:   float    // 0..1 or seconds recovered toward budget
   didWeJustWalk:    boolean  // phase flag
   // backtrace pointers for journey reconstruction
   parent, tripId, boardStop, ...
 }
 ```
 
-**Dominance:** label A dominates B at the same stop if A is ≤ B on every criterion (arrival, sprintUsed, −recharge as appropriate) and strictly better on at least one. Dominated labels are discarded (McRAPTOR bag).
+**Dominance:** compare labels only at the same stop and with the same `didWeJustWalk` state, because labels with different legal next moves are not interchangeable. Label A dominates B if A arrives no later and has used no more sprint, with at least one strict improvement. Dominated labels are discarded (McRAPTOR bag).
 
 **`didWeJustWalk` rules (core invariants):**
 
@@ -127,8 +133,9 @@ Label {
 
 - Each footpath expansion offers two branches where budget allows:
   - **Normal walk:** `time = d / vWalk`, no sprint cost
-  - **Sprint:** `time = d / vSprint`, `sprintUsedSec += d/vWalk − d/vSprint` (or equivalent), subject to budget cap
-- While **riding** (GTFS in-vehicle edge): advance `sprintRecharge` per config; no walking.
+  - **Sprint:** `time = d / vSprint`, `sprintUsedSec += d / vSprint`, subject to the journey-wide budget cap
+- `sprintUsedSec` measures actual seconds spent sprinting, not seconds saved versus walking.
+- While **riding** or waiting: leave `sprintUsedSec` unchanged. There is no recharge in the initial model.
 
 **Sprint selection policy (product layer, not search core):**
 
@@ -174,7 +181,7 @@ Extract Pareto bag at END → apply SprintPolicy → return itinerary
 Used for UI comparison and trust, not search pruning.
 
 1. Call OTP plan API → get itinerary (sequence of walk + ride legs).
-2. For each **walk** leg: route same endpoints through GraphHopper at normal walk speed → replace duration/distance.
+2. For each **walk** leg: route the same endpoints through GraphHopper → replace distance/geometry, then compute duration as `distance / vWalk`.
 3. For each **ride** leg: prefer times from **our GTFS index** for the same trip; fall back to OTP duration if trip matching fails.
 4. Rebuild timeline from departure time → **`T₀`** (standard plan on our walk model).
 
@@ -203,7 +210,8 @@ Both GraphHopper and OTP snap lat/lon to their street graphs. This is expected.
 
 Implications:
 
-- Use GraphHopper for **all** walk times in the engine.
+- Use GraphHopper for **all** pedestrian paths, distances, geometry, and snapping in the engine.
+- Use SprintWise's speed model for all walk and sprint durations on those paths.
 - Log GraphHopper snap distance; flag large values (> ~50 m) as suspicious.
 - Prefer explicit `STOP` / `STATION` start when the user is already at a platform.
 - Precompute or cache **stop link points** (GraphHopper snap of each stop) for consistent footpaths.
@@ -230,20 +238,24 @@ Each phase: **goal → build → done when → explicitly defer**.
 
 ### Phase 0 — Data and comparison baseline
 
-**Goal:** Reproducible map/transit data and OTP running for manual checks.
+**Goal:** Confirm the fixed map/transit snapshot, align the backend toolchain, and get OTP running for manual checks.
 
 **Build:**
 
-- `./scripts/download-data.sh` → `data/nyc-metro.osm.pbf`, GTFS feeds
-- `./scripts/run-otp.sh` + `./scripts/start-otp.sh` → OTP at `http://localhost:8080`
+- Verify that the existing fixed snapshot contains `data/nyc-metro.osm.pbf` and the MTA/LIRR GTFS feeds; do **not** rerun `scripts/download-data.sh`
+- Align the JDK used by `java`, Maven, and `backend/pom.xml` to one supported major version before writing backend code
+- If `data/graph.obj` already exists, use `./scripts/start-otp.sh` directly; run `./scripts/run-otp.sh` only when the graph is absent or an intentional future data refresh requires rebuilding it
+- Start OTP at `http://localhost:8080` for manual baseline checks
 - Create `docs/golden-queries.md` with ~10 representative trips (subway-only, transfer, LIRR, near-miss train scenarios)
 
 **Done when:**
 
 - OTP returns sensible plans for all golden queries
 - Saved OTP JSON responses exist for regression comparison
+- The snapshot remains unchanged throughout subsequent phases
+- `java --version`, the Java runtime reported by `mvn --version`, and the Maven compiler target agree; a basic backend Maven test/build succeeds
 
-**Defer:** custom router, sprint, frontend
+**Defer:** data refresh/live data, custom router, sprint, frontend
 
 ---
 
@@ -304,7 +316,8 @@ Each phase: **goal → build → done when → explicitly defer**.
 **Build:**
 
 - Embed GraphHopper on `data/nyc-metro.osm.pbf` (foot profile)
-- `FootpathService`: `(from, to) → meters, seconds, geometry`; in-memory cache
+- `FootpathService`: `(from, to) → meters, geometry, snap metadata`; in-memory path cache independent of user speed
+- `WalkTimeModel`: `(meters, vWalk) → seconds`
 - Wire into RAPTOR:
   - Round 0: access from `START` coords to stops within `maxAccessMeters`
   - Transfer walks after alight (GraphHopper between stop pairs within `maxTransferMeters`)
@@ -314,6 +327,7 @@ Each phase: **goal → build → done when → explicitly defer**.
 **Done when:**
 
 - Door-to-door time-only trips are plausible on golden queries
+- Changing `vWalk` changes every access, transfer, and egress duration without changing GraphHopper's ownership of the pedestrian path
 - Snap distances logged; outliers flagged
 
 **Defer:** sprint, McRAPTOR bags, OTP reprice
@@ -347,13 +361,13 @@ Each phase: **goal → build → done when → explicitly defer**.
 **Build:**
 
 - `OtpClient` — call local OTP plan API
-- `BaselineService` — OTP itinerary → reprice walks on GraphHopper → reprice rides from GTFS → `T₀`
+- `BaselineService` — OTP itinerary → re-route walks on GraphHopper and time them with `vWalk` → reprice rides from GTFS → `T₀`
 - `POST /plan/baseline`
 
 **Done when:**
 
 - Every golden query with an OTP result has a repriced baseline
-- No OTP walk meters used in comparisons
+- No OTP walk meters or durations are used in comparisons
 
 **Defer:** using `T₀` as search prune; sprint
 
@@ -365,20 +379,21 @@ Each phase: **goal → build → done when → explicitly defer**.
 
 **Build:**
 
-- Extend label: `sprintUsedSec`, `sprintRecharge`, `didWeJustWalk`
+- Extend label: `sprintUsedSec`, `didWeJustWalk`
 - Document dominance rules in code comments matching this file
 - Footpath expansion: normal + sprint branches subject to budget
-- Recharge on ride edges per config
+- Preserve `sprintUsedSec` unchanged across ride and wait edges; no recharge
 - Enforce walk→ride→walk invariants via `didWeJustWalk`
 
 **Done when:**
 
 - Near-miss golden queries find earlier trains with sprint that walk-only cannot
 - Queries where sprint should not matter: best sprint label ≈ best no-sprint label
+- A test that rides transit between two walks confirms that previously spent sprint budget is not restored
 
-**Defer:** sprint payoff policy, per-leg UX
+**Defer:** sprint recharge/recovery, sprint payoff policy, per-leg UX
 
-**Suggested AI prompt:** *Add sprint criteria to existing McRAPTOR. Spec: [paste label rules from this doc]. Do not change payoff selection yet.*
+**Suggested AI prompt:** *Add the non-rechargeable sprint criterion to existing McRAPTOR. Spec: [paste label rules from this doc]. Sprint usage is actual seconds spent sprinting and remains spent across rides and waits. Do not add recovery/recharge or change payoff selection yet.*
 
 ---
 
@@ -447,7 +462,7 @@ Each phase: **goal → build → done when → explicitly defer**.
 - Precompute/cache GH stop-pair footpaths for eligible transfer pairs
 - Expand golden query suite; automated regression tests
 - Structured logging: rounds, bag sizes, snap distances, phase timings
-- Later: GTFS-RT, user prefs sync, auth
+- Much later: deliberate static-data refreshes, GTFS-RT, sprint recharge/recovery, user prefs sync, auth
 
 **Done when:**
 
@@ -525,7 +540,6 @@ Phases 5 and 6 can run in parallel once Phase 4 is done.
 | `maxRounds` / `maxTransfers` | Cap RAPTOR depth |
 | `vWalk` / `vSprint` | User walk speeds (m/s) |
 | `maxSprintSecondsPerTrip` | Sprint budget cap |
-| `sprintRechargeRate` | Recharge while on transit |
 | `minSprintPayoffMinutes` | Minimum total trip savings to recommend sprint |
 | `maxSnapDistanceMeters` | Warn/reject bad snaps |
 
@@ -533,8 +547,9 @@ Phases 5 and 6 can run in parallel once Phase 4 is done.
 
 ## Success criteria (project-level)
 
-- User sets walk speed; engine respects it on all walk legs via GraphHopper.
+- User sets walk speed; GraphHopper supplies every pedestrian path and SprintWise applies that speed to every walk leg.
 - Engine finds trips where brief sprint catches a materially earlier train.
+- Sprint budget is measured in actual sprint seconds and never recharges during a journey.
 - Sprint advice is suppressed when total savings are below `minSprintPayoffMinutes`.
 - Baseline `T₀` shows what a standard walk-everywhere plan looks like on the same map model.
 - Golden queries pass regression after every phase merge.
