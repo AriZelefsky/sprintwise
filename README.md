@@ -35,6 +35,14 @@ This downloads the NY state OpenStreetMap extract temporarily, clips it to the N
 
 ### 3. Backend setup
 
+On macOS with Homebrew, install and select the pinned JDK for the current shell:
+
+```bash
+brew install openjdk@25
+export JAVA_HOME="$(brew --prefix openjdk@25)"
+export PATH="$JAVA_HOME/bin:$PATH"
+```
+
 Confirm that both the shell and Maven are using Java 25:
 
 ```bash
