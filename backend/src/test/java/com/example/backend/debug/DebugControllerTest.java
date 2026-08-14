@@ -150,6 +150,13 @@ class DebugControllerTest {
             .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
             .andExpect(jsonPath("$.code").value("feed_unavailable"))
             .andExpect(jsonPath("$.feedId").value("missing"))
+            .andExpect(jsonPath("$.diagnosticCode").value("source_missing"))
+            .andExpect(jsonPath("$.diagnosticSeverity").value("fatal"))
+            .andExpect(jsonPath("$.sourceFile").value("unspecified"))
+            .andExpect(jsonPath("$.entityType").value("feed"))
+            .andExpect(jsonPath("$.entityId").value("missing"))
+            .andExpect(jsonPath("$.field").value("source"))
+            .andExpect(jsonPath("$.referencedId").value("unspecified"))
             .andExpect(jsonPath("$.source").value(
                 FIXTURE.resolve("does-not-exist").toAbsolutePath().normalize().toString()
             ));

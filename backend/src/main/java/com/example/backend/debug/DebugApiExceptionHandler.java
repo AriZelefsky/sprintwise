@@ -1,5 +1,6 @@
 package com.example.backend.debug;
 
+import com.example.backend.gtfs.GtfsImportDiagnostic;
 import com.example.backend.gtfs.GtfsLoadException;
 import com.example.backend.service.FeedUnavailableException;
 import org.springframework.http.HttpStatus;
@@ -52,17 +53,35 @@ public final class DebugApiExceptionHandler {
         );
         problem.setProperty("feedId", exception.feedId());
         problem.setProperty("source", exception.source().toString());
+        exception.diagnostic().ifPresent(diagnostic -> addDiagnostic(problem, diagnostic));
         return problem;
     }
 
     @ExceptionHandler(GtfsLoadException.class)
     ProblemDetail feedLoadFailure(GtfsLoadException exception) {
-        return problem(
+        ProblemDetail problem = problem(
             HttpStatus.SERVICE_UNAVAILABLE,
             "GTFS feed unavailable",
             exception.getMessage(),
             "feed_unavailable"
         );
+        addDiagnostic(problem, exception.diagnostic());
+        return problem;
+    }
+
+    private static void addDiagnostic(
+        ProblemDetail problem,
+        GtfsImportDiagnostic diagnostic
+    ) {
+        problem.setProperty("diagnosticCode", diagnostic.code().wireValue());
+        problem.setProperty("diagnosticSeverity", diagnostic.severity().wireValue());
+        problem.setProperty("feedId", diagnostic.feedId());
+        problem.setProperty("source", diagnostic.feedSource().toString());
+        problem.setProperty("sourceFile", diagnostic.sourceFile());
+        problem.setProperty("entityType", diagnostic.entityType());
+        problem.setProperty("entityId", diagnostic.entityId());
+        problem.setProperty("field", diagnostic.field());
+        problem.setProperty("referencedId", diagnostic.referencedId());
     }
 
     private static ProblemDetail problem(

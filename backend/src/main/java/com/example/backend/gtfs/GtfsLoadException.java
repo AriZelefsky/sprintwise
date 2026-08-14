@@ -2,11 +2,19 @@ package com.example.backend.gtfs;
 
 public final class GtfsLoadException extends RuntimeException {
 
-    public GtfsLoadException(String message) {
-        super(message);
+    private final GtfsImportDiagnostic diagnostic;
+
+    public GtfsLoadException(GtfsImportDiagnostic diagnostic) {
+        super(diagnostic.formatMessage());
+        this.diagnostic = diagnostic;
     }
 
-    public GtfsLoadException(String message, Throwable cause) {
-        super(message, cause);
+    public GtfsLoadException(GtfsImportDiagnostic diagnostic, Throwable cause) {
+        super(diagnostic.formatMessage(), cause);
+        this.diagnostic = diagnostic;
+    }
+
+    public GtfsImportDiagnostic diagnostic() {
+        return diagnostic;
     }
 }

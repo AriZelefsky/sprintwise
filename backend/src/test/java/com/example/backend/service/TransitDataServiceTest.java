@@ -5,6 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.example.backend.config.GtfsProperties;
+import com.example.backend.gtfs.GtfsDiagnosticCode;
+import com.example.backend.gtfs.GtfsDiagnosticSeverity;
+import com.example.backend.gtfs.GtfsImportDiagnostic;
 import com.example.backend.gtfs.GtfsLoadException;
 import com.example.backend.gtfs.GtfsLoader;
 import com.example.backend.gtfs.onebusaway.OneBusAwayGtfsLoader;
@@ -35,7 +38,18 @@ class TransitDataServiceTest {
 
     @Test
     void preservesFeedLoadFailureForClearRepeatedReporting() {
-        GtfsLoadException failure = new GtfsLoadException("bad required reference");
+        GtfsLoadException failure = new GtfsLoadException(new GtfsImportDiagnostic(
+            GtfsDiagnosticSeverity.FATAL,
+            GtfsDiagnosticCode.MISSING_REQUIRED_REFERENCE,
+            "broken",
+            Path.of("broken-feed"),
+            "trips.txt",
+            "trip",
+            "BROKEN_TRIP",
+            "route_id",
+            "MISSING_ROUTE",
+            "bad required reference"
+        ));
         GtfsLoader loader = (source, feedId) -> {
             throw failure;
         };
@@ -48,6 +62,7 @@ class TransitDataServiceTest {
         FeedUnavailableException second = assertThrows(FeedUnavailableException.class, service::index);
         assertSame(first, second);
         assertSame(failure, first.getCause());
+        assertSame(failure.diagnostic(), first.diagnostic().orElseThrow());
     }
 
     private static GtfsProperties properties(String feedId, Path path) {
