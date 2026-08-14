@@ -1,0 +1,7 @@
+server:
+  port: ${SERVER_PORT:8081}
+
+sprintwise:
+  gtfs:
+    mta-path: ${SPRINTWISE_MTA_GTFS_PATH:../data/gtfs/mta}
+    feed-id: ${SPRINTWISE_GTFS_FEED_ID:mta}

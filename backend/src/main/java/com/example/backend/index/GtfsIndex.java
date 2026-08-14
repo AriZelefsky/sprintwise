@@ -161,6 +161,10 @@ public final class GtfsIndex {
         return stats;
     }
 
+    public Set<FeedScopedId> activeServiceIds(LocalDate serviceDate) {
+        return calendarResolver.activeServiceIds(serviceDate);
+    }
+
     private void addCandidateDepartures(
         List<ScheduledDeparture> schedule,
         LocalDate serviceDate,

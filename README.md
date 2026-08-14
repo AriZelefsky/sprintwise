@@ -62,6 +62,31 @@ complete frozen MTA timetable index in a separate Java process capped at 2 GiB,
 run `mvn verify -Preal-mta-index`. The optional integration test skips itself when
 `data/gtfs/mta/` is unavailable.
 
+Start the backend from `backend/` with:
+
+```bash
+mvn spring-boot:run
+```
+
+It reads the frozen feed from `../data/gtfs/mta` and listens on port 8081 by
+default, leaving OTP's port 8080 free. Override those settings without changing
+the snapshot with `SPRINTWISE_MTA_GTFS_PATH`, `SPRINTWISE_GTFS_FEED_ID`, and
+`SERVER_PORT`.
+
+Stage 1 debug inspection examples (all IDs are `feed:id`; departure timestamps
+must include an explicit UTC offset):
+
+```bash
+curl 'http://localhost:8081/debug/stop/mta:101'
+curl 'http://localhost:8081/debug/departures?stopId=mta:101S&at=2026-08-13T08:00:00-04:00&limit=3'
+curl 'http://localhost:8081/debug/trip/mta:L0S1-1-1094-S02_048200_1..S15R'
+curl 'http://localhost:8081/debug/services?date=2026-08-13'
+```
+
+If the configured feed cannot be loaded, the application remains available for
+diagnosis and these endpoints return a structured HTTP 503 error describing the
+feed ID and source path.
+
 ### 4. Frontend setup
 ```bash
 cd frontend

@@ -4,8 +4,8 @@ Last updated: 2026-08-13
 
 ## Where the project is now
 
-The project is up to **Stage 1D** of the routing plan. Stages 1A through 1C are
-implemented and committed:
+The project has implemented **Stage 1D** of the routing plan. Stages 1A through
+1C are committed; Stage 1D is implemented in the current working tree:
 
 - **Stage 1A — GTFS ingestion boundary:** OneBusAway parses GTFS and maps it into
   immutable, feed-namespaced SprintWise models.
@@ -15,6 +15,10 @@ implemented and committed:
 - **Stage 1C — in-memory timetable index:** stops, routes, trips, ordered stop
   times, trips serving stops, and binary-searched departures are indexed. The
   frozen MTA integration test completed under a 2 GiB heap limit.
+- **Stage 1D — real-feed configuration and debug inspection:** the Spring Boot
+  backend loads one configured frozen feed/index and provides read-only stop,
+  departure, trip, and active-service inspection endpoints on port 8081 by
+  default. Synthetic and optional real-MTA HTTP tests cover this boundary.
 
 Latest Stage 1C commit:
 
@@ -25,11 +29,11 @@ deterministic schedule queries, synthetic tests, and frozen MTA memory measureme
 
 Latest verification when this file was written:
 
-- Normal Java 25 suite: 23 tests passed.
-- Frozen-MTA integration profile: 1 integration test passed.
+- Normal Java 25 suite: 31 tests passed.
+- Frozen-MTA integration profile: 2 integration tests passed.
 - Frozen MTA snapshot: 1,488 stops, 20,621 trips, and 565,093 stop times.
-- Approximate retained timetable-index heap: 102.6 MiB.
-- Approximate index construction time: 0.35 seconds.
+- Approximate retained timetable-index heap: 103.2 MiB.
+- Approximate index construction time: 0.37 seconds.
 
 ## Human review still required
 
@@ -40,37 +44,16 @@ feed-scoped ID behavior, GTFS calendar/time semantics, departure-query behavior,
 immutability, error handling, and memory duplication. Automated review should not
 replace this human review.
 
-## Next implementation step: Stage 1D
+## Next step: review Stage 1
 
-Stage 1D adds **real-feed application configuration and debug inspection
-endpoints**. It should turn the Stage 1 library code into a runnable Spring Boot
-backend that loads the frozen MTA feed once at startup, constructs one immutable
-`GtfsIndex`, and exposes read-only HTTP endpoints for inspecting:
-
-- A stop by its feed-namespaced ID.
-- The next departures at a stop for an explicit offset-bearing timestamp.
-- A trip and its stop times in `stop_sequence` order.
-- Active service IDs for an explicit service date.
-
-Stage 1D should also add consistent JSON request errors, a configurable MTA feed
-path, a configurable backend port that does not conflict with OTP on port 8080,
-synthetic controller tests, and an optional frozen-MTA HTTP integration test. It
-must use the same OneBusAway loader and `GtfsIndex` construction path as the
-synthetic tests. It must not add routing, RAPTOR, transfers, GraphHopper, sprint,
-rechargeability, data downloads, or OTP graph rebuilding.
-
-Before beginning Stage 1D:
-
-1. Read `docs/ROUTING-PLAN.md` and this file.
-2. Confirm `git status` is clean.
-3. Confirm Maven is running on Java 25.
-4. Run `cd backend && mvn test`.
-5. Complete or explicitly defer the closer human review of Stages 1A–1C.
+Stage 1D should be committed after reviewing its diff. Then perform the closer
+human review of Stages 1A–1C and run the full computerized Stage 1 audit below.
+Do not begin Stage 2 until those reviews are complete or their remaining risks
+are explicitly accepted.
 
 ## Bonus next task: full computerized Stage 1 audit
 
-Run this after Stage 1D is implemented, because the audit includes the debug
-endpoints and checks all of Stage 1 together:
+The debug endpoints are now implemented, so this audit is ready to run:
 
 ```text
 Audit and finish Stage 1 only.
