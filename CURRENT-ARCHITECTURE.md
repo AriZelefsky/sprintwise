@@ -5,6 +5,134 @@ to let my incoming partner @ Zach Rosenberg gain a thorough and deep understandi
 
 Last checked against the working tree: 2026-08-14.
 
+## Transit vocabulary: stop, route, trip, and stop time
+
+These words have specific GTFS meanings. Understanding them first makes the
+rest of the architecture much easier.
+
+### Stop: a place where transit can be served
+
+A **stop** is a physical transit location identified by `stop_id`. Depending on
+the feed, it can represent a station, platform, entrance, or boarding area. In
+SprintWise's planned routing graph, a boardable GTFS stop is a node at which a
+search label can exist.
+
+For example, the northbound and southbound platforms of one subway station may
+have different stop IDs and a shared parent-station ID. The current Stage 1
+model preserves both the individual stop and its optional parent relationship;
+it does not automatically merge every platform into one node.
+
+### Route: the named transit service or line
+
+A **route** is the public-facing service grouping identified by `route_id`, such
+as a subway line. It supplies names and a transit type. A route is **not** one
+particular train departure, and it is not necessarily one exact sequence of
+stops.
+
+One route can have:
+
+- Thousands of scheduled train runs.
+- Both directions of travel.
+- Express and local variants.
+- Short-turn trips that end before other trips on the same line.
+- Different stop sequences at different times.
+
+Therefore, the future routing engine cannot safely say "ride the Route object
+down its stops." The GTFS `Route` does not own one authoritative ordered stop
+list or one timetable.
+
+### Trip: one scheduled vehicle run
+
+A **trip** is one scheduled-run definition identified by `trip_id`. It belongs
+to one route and references one service ID. Its ordered stop times say exactly
+where that run goes and when. It is not yet tied to one concrete calendar date:
+the service calendar can instantiate the same trip definition on many active
+dates.
+
+For example, "the downtown 1 run leaving its first stop at 08:02 on weekday
+service" is represented by a trip definition and may occur on every applicable
+weekday. Choosing Thursday, August 13 turns it into a concrete dated run.
+Another 1 train ten minutes later is another trip, even if it visits the same
+stops. An express variant or short-turn train is also a different trip.
+
+A trip does not have to start at the stop where the passenger finds it. A trip
+can begin elsewhere, pass through the passenger's current stop, and continue to
+later stops. What matters for boarding is that:
+
+- The trip serves the current stop.
+- Its service is active on the relevant service date.
+- Its departure at that stop is late enough for the passenger to catch.
+- Pickup is permitted at that stop.
+
+### Stop time: a trip's visit to one stop
+
+A **stop time** joins a trip to a stop. It contains:
+
+- The stop's position in that trip (`stop_sequence`).
+- Arrival and departure seconds.
+- Pickup and drop-off rules.
+
+If one train visits five stops, Stage 1 stores one `Trip` and five ordered
+`StopTime` records. The third stop time means "this trip's visit to its third
+stop," not a separate trip or a generic property of the route.
+
+### Service: the dates on which a trip exists
+
+A trip references a **service ID**. `calendar.txt` and `calendar_dates.txt`
+decide which civil/service dates that ID is active. The same trip timetable can
+therefore be active on many weekdays and inactive on weekends or exception
+dates.
+
+### How a future routing round will use these concepts
+
+Yes: the future RAPTOR stage is expected to work roughly as follows.
+
+```text
+Current search label at Stop B
+          |
+          v
+Find trips/patterns that serve Stop B
+(including trips that began earlier and merely pass through B)
+          |
+          v
+Choose a trip that is active, catchable, and permits pickup at B
+          |
+          v
+Scan that same trip's ordered StopTimes after B
+          |
+          +------> Stop C: possible arrival
+          +------> Stop D: possible arrival
+          `------> Stop E: possible arrival
+```
+
+The passenger boards once at B and can remain on that trip across C and D to E.
+The algorithm must not treat B-to-C, C-to-D, and D-to-E as three new boardings.
+It may create an arrival at a downstream stop only where that stop time permits
+drop-off.
+
+The current Stage 1 index already preserves the two key ingredients:
+
+- `tripsByStop`: which complete trips serve or pass through a stop.
+- `stopTimesByTrip`: the complete ordered stop sequence for each trip.
+
+Stage 2 is expected to derive a more compact **trip-pattern** or RAPTOR-specific
+index from those verified structures. A trip pattern groups trips that share the
+same ordered stop sequence, allowing many similar scheduled runs to be scanned
+efficiently. That derived pattern is different from the feed's `Route`: one
+route may require several patterns because its trips have different directions
+or stop sequences.
+
+Routes still matter, but mostly as stable grouping and descriptive information:
+
+- Every trip must reference a valid route.
+- Results can say which line/service the passenger rides.
+- Route type can distinguish subway, rail, bus, and other modes.
+- Future policies may filter or present routes differently.
+- Route identity helps describe and reconstruct a journey.
+
+The scheduled movement itself comes from a **Trip plus its ordered StopTimes**,
+not from the Route record alone.
+
 ## The most important fact
 
 SprintWise does **not** route journeys yet.
