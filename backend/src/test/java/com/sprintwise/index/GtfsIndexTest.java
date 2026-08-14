@@ -130,6 +130,36 @@ class GtfsIndexTest {
     }
 
     @Test
+    void findsFortyNineHourDepartureFromTwoServiceDatesEarlier() {
+        GtfsIndex longSpanIndex = longSpanIndex();
+
+        List<TimetableDeparture> departures = longSpanIndex.nextDepartures(
+            id("A"),
+            at(2026, 8, 15, 1, 4),
+            1
+        );
+
+        assertEquals(1, departures.size());
+        assertEquals("LONG_WEEKDAY", departures.getFirst().tripId().id());
+        assertEquals(LocalDate.of(2026, 8, 13), departures.getFirst().serviceTime().serviceDate());
+        assertEquals(49 * 3_600 + 5 * 60, departures.getFirst().serviceTime().secondsSinceServiceDayStart());
+        assertEquals(at(2026, 8, 15, 1, 5), departures.getFirst().departureInstant());
+    }
+
+    @Test
+    void filtersInactiveServicesAcrossEveryDerivedCandidateDate() {
+        List<TimetableDeparture> departures = longSpanIndex().nextDepartures(
+            id("A"),
+            at(2026, 8, 16, 1, 4),
+            10
+        );
+
+        assertFalse(departures.stream().anyMatch(
+            departure -> departure.tripId().id().equals("LONG_SPECIAL")
+        ));
+    }
+
+    @Test
     void equalTimeDeparturesUseTripIdAsStableTieBreaker() {
         var trips = new ArrayList<>(feed.trips());
         trips.add(new Trip(id("A_TIE"), id("RED"), id("WEEKDAY"), "Tie", "0"));
@@ -178,6 +208,31 @@ class GtfsIndexTest {
 
     private static FeedScopedId id(String rawId) {
         return new FeedScopedId(FEED_ID, rawId);
+    }
+
+    private static GtfsIndex longSpanIndex() {
+        var trips = new ArrayList<>(feed.trips());
+        trips.add(new Trip(id("LONG_WEEKDAY"), id("DIRECT"), id("WEEKDAY"), "Long", "0"));
+        trips.add(new Trip(id("LONG_SPECIAL"), id("DIRECT"), id("SPECIAL"), "Long", "0"));
+
+        var stopTimes = new ArrayList<>(feed.stopTimes());
+        int departure = 49 * 3_600 + 5 * 60;
+        int arrival = 49 * 3_600 + 15 * 60;
+        stopTimes.add(new StopTime(id("LONG_WEEKDAY"), id("A"), 1, departure, departure));
+        stopTimes.add(new StopTime(id("LONG_WEEKDAY"), id("C"), 2, arrival, arrival));
+        stopTimes.add(new StopTime(id("LONG_SPECIAL"), id("A"), 1, departure + 60, departure + 60));
+        stopTimes.add(new StopTime(id("LONG_SPECIAL"), id("C"), 2, arrival + 60, arrival + 60));
+
+        return new GtfsIndex(new GtfsFeed(
+            feed.feedId(),
+            feed.agencyZoneId(),
+            feed.stops(),
+            feed.routes(),
+            trips,
+            stopTimes,
+            feed.serviceCalendars(),
+            feed.serviceCalendarDates()
+        ));
     }
 
     private static Instant at(int year, int month, int day, int hour, int minute) {

@@ -266,6 +266,13 @@ Each phase: **goal → build → done when → explicitly defer**.
 
 ### Phase 1 — GTFS index (Java)
 
+**Implementation status:** Stage/Phase 1 is implementation-complete, pending
+human review. A computerized Stage 1 review was performed; its remaining
+timetable-foundation findings (pickup/drop-off semantics, comprehensive
+stop-time validation, and feed-derived maximum-trip-span handling) have been
+resolved. Do not begin Stage 2 until the pending human review is complete or
+its remaining risks are explicitly accepted.
+
 **Goal:** Load and index transit data; no routing yet.
 
 **Build:**
@@ -276,9 +283,29 @@ Each phase: **goal → build → done when → explicitly defer**.
   - `index/GtfsIndex` — structures below
 - Index:
   - `stopsById`
-  - trips/patterns serving each stop at a given time
+  - trips and departures serving each stop at a given time
   - `stopTimesForTrip`
   - active services for `LocalDate` / `LocalDateTime`
+- Preserve each `trip_id` as one complete ordered run. For example, a train
+  serving five stops remains one `Trip` with five `StopTime` records; it is not
+  split into four adjacent-stop trips.
+- Preserve all four GTFS `pickup_type` and `drop_off_type` values in explicit
+  SprintWise enums. Blank values mean regular service. Only regular service
+  permits ordinary boarding/alighting; phone and driver-coordination values
+  remain distinct for future policy decisions.
+- Validate stop times before exposing a loaded timetable: every trip has at
+  least two stops; sequences are non-negative, unique, and strictly increasing;
+  both times are required at the first and last stops; an intermediate stop may
+  have both times or neither (no interpolation in Stage 1), but not just one;
+  departure cannot precede arrival; and known times cannot move backward.
+  GTFS times above `24:00` remain valid integer service-day offsets.
+- Derive the service-date search window from the largest arrival/departure
+  offset in the feed. For a query, inspect deterministic overlapping service
+  dates until an older date's maximum possible departure is before the query,
+  calendar-filter every date, and retain the existing noon-minus-twelve DST
+  policy. With `D` overlapping candidate service dates and `S` departures at a
+  stop, each candidate begins with `O(log S)` binary search followed by only the
+  schedule entries needed to collect results (plus skipped inactive entries).
 - Debug API:
   - `GET /debug/stop/{id}`
   - `GET /debug/departures?stopId=&at=`
@@ -288,7 +315,10 @@ Each phase: **goal → build → done when → explicitly defer**.
 - Next departures from a known stop match OTP or a GTFS viewer
 - Weekday vs weekend service filtering works
 
-**Defer:** GraphHopper, RAPTOR, sprint
+**Defer:** Trip-pattern construction and compact integer/array RAPTOR indexes
+to the beginning of Stage 2, along with the RAPTOR ride scan itself. Also defer
+GraphHopper and sprint behavior. Stage 1 preserves and validates the full
+ordered trips and access semantics those later structures will consume.
 
 **Suggested AI prompt:** *Implement GTFS loader + timetable index for MTA subway only. Add debug REST endpoints and tests for three known stop IDs.*
 

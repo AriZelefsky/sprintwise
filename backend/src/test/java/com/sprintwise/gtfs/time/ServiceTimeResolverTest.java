@@ -64,7 +64,7 @@ class ServiceTimeResolverTest {
 
         assertEquals(ZoneId.of("America/New_York"), times.agencyZoneId());
         assertEquals(
-            List.of(LocalDate.of(2026, 8, 13), LocalDate.of(2026, 8, 12)),
+            List.of(LocalDate.of(2026, 8, 13)),
             times.serviceDateCandidates(lateNewYorkEvening)
         );
     }
@@ -98,6 +98,62 @@ class ServiceTimeResolverTest {
         assertEquals(ZoneOffset.ofHours(-5), resolvedLater.getOffset());
         assertEquals(Duration.ofHours(2), Duration.between(times.toInstant(start), times.toInstant(twoHoursLater)));
         assertFalse(times.toInstant(twoHoursLater).isBefore(times.toInstant(start)));
+    }
+
+    @Test
+    void derivesAServiceDateWindowFromTheFeedsMaximumScheduledTime() {
+        var resolver = new ServiceTimeResolver(feed.agencyZoneId(), 49 * 3_600 + 15 * 60);
+        Instant query = ZonedDateTime.of(
+            2026, 8, 15, 1, 4, 0, 0, feed.agencyZoneId()
+        ).toInstant();
+
+        assertEquals(177_300, resolver.maximumScheduledTimeSeconds());
+        assertEquals(2, resolver.serviceDateLookbackDays());
+        assertEquals(
+            List.of(
+                LocalDate.of(2026, 8, 15),
+                LocalDate.of(2026, 8, 14),
+                LocalDate.of(2026, 8, 13)
+            ),
+            resolver.serviceDateCandidates(query)
+        );
+    }
+
+    @Test
+    void multiDayCandidateWindowRetainsNoonMinusTwelveDstSemantics() {
+        var resolver = new ServiceTimeResolver(feed.agencyZoneId(), 50 * 3_600 + 5 * 60);
+        ServiceTime departure = new ServiceTime(LocalDate.of(2026, 3, 6), 50 * 3_600 + 5 * 60);
+        Instant justBeforeDeparture = resolver.toInstant(departure).minusSeconds(60);
+
+        assertEquals(
+            List.of(
+                LocalDate.of(2026, 3, 8),
+                LocalDate.of(2026, 3, 7),
+                LocalDate.of(2026, 3, 6)
+            ),
+            resolver.serviceDateCandidates(justBeforeDeparture)
+        );
+        assertEquals(
+            ZonedDateTime.of(2026, 3, 8, 3, 5, 0, 0, feed.agencyZoneId()),
+            resolver.toAgencyZonedDateTime(departure)
+        );
+    }
+
+    @Test
+    void fallDstQueryBeforeServiceTimeZeroStillConsidersTheCivilServiceDate() {
+        var resolver = new ServiceTimeResolver(feed.agencyZoneId(), 30 * 60);
+        Instant query = ZonedDateTime.of(
+            2026, 11, 1, 0, 30, 0, 0, feed.agencyZoneId()
+        ).toInstant();
+
+        assertEquals(
+            List.of(LocalDate.of(2026, 11, 1)),
+            resolver.serviceDateCandidates(query)
+        );
+        assertEquals(
+            ZonedDateTime.of(2026, 11, 1, 1, 30, 0, 0, feed.agencyZoneId()),
+            resolver.toAgencyZonedDateTime(new ServiceTime(LocalDate.of(2026, 11, 1), 1_800))
+        );
     }
 
     private static Path fixtureDirectory() throws URISyntaxException, IOException {

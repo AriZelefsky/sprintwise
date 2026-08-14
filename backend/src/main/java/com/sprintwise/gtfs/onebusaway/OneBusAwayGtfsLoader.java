@@ -9,6 +9,7 @@ import com.sprintwise.gtfs.GtfsLoadException;
 import com.sprintwise.gtfs.GtfsLoader;
 import com.sprintwise.model.FeedScopedId;
 import com.sprintwise.model.GtfsFeed;
+import com.sprintwise.model.PickupDropOffType;
 import com.sprintwise.model.Route;
 import com.sprintwise.model.ServiceCalendar;
 import com.sprintwise.model.ServiceCalendarDate;
@@ -22,13 +23,16 @@ import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.zone.ZoneRulesException;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeMap;
 import org.onebusaway.csv_entities.exceptions.CsvEntityIOException;
 import org.onebusaway.gtfs.impl.GtfsRelationalDaoImpl;
 import org.onebusaway.gtfs.model.AgencyAndId;
@@ -201,7 +205,21 @@ public final class OneBusAwayGtfsLoader implements GtfsLoader {
                     ),
                     stopTime.getStopSequence(),
                     stopTime.isArrivalTimeSet() ? stopTime.getArrivalTime() : null,
-                    stopTime.isDepartureTimeSet() ? stopTime.getDepartureTime() : null
+                    stopTime.isDepartureTimeSet() ? stopTime.getDepartureTime() : null,
+                    pickupDropOffType(
+                        source,
+                        feedId,
+                        entityId,
+                        "pickup_type",
+                        stopTime.getPickupType()
+                    ),
+                    pickupDropOffType(
+                        source,
+                        feedId,
+                        entityId,
+                        "drop_off_type",
+                        stopTime.getDropOffType()
+                    )
                 );
             })
             .sorted(Comparator.comparing(StopTime::tripId).thenComparingInt(StopTime::stopSequence))
@@ -260,7 +278,141 @@ public final class OneBusAwayGtfsLoader implements GtfsLoader {
             .toList();
 
         validateRelationships(source, feedId, stops, routes, trips, stopTimes, calendars, calendarDates);
+        validateStopTimes(source, feedId, trips, stopTimes);
         return new GtfsFeed(feedId, agencyZone, stops, routes, trips, stopTimes, calendars, calendarDates);
+    }
+
+    private static PickupDropOffType pickupDropOffType(
+        Path source,
+        String feedId,
+        String entityId,
+        String field,
+        int value
+    ) {
+        return PickupDropOffType.fromGtfsValue(value).orElseThrow(() -> failure(
+            source,
+            feedId,
+            GtfsDiagnosticCode.INVALID_PICKUP_DROP_OFF_TYPE,
+            "stop_times.txt",
+            "stop_time",
+            entityId,
+            field,
+            Integer.toString(value),
+            "GTFS " + field + " must be one of 0, 1, 2, or 3; found " + value
+        ));
+    }
+
+    /**
+     * Validates the Stage 1 timetable contract. Each trip is one complete run,
+     * not a collection of stop-to-stop legs. Its endpoints must be timed;
+     * intermediate stops may omit both times (no interpolation is attempted),
+     * but a lone arrival or departure is rejected as unsupported.
+     */
+    private static void validateStopTimes(
+        Path source,
+        String feedId,
+        List<Trip> trips,
+        List<StopTime> stopTimes
+    ) {
+        Map<FeedScopedId, List<StopTime>> byTrip = new TreeMap<>();
+        for (StopTime stopTime : stopTimes) {
+            byTrip.computeIfAbsent(stopTime.tripId(), ignored -> new ArrayList<>())
+                .add(stopTime);
+        }
+
+        for (Trip trip : trips) {
+            List<StopTime> tripStopTimes = byTrip.getOrDefault(trip.id(), List.of());
+            if (tripStopTimes.size() < 2) {
+                throw invalidStopTime(
+                    source,
+                    feedId,
+                    "trip",
+                    trip.id().id(),
+                    "trip_id",
+                    trip.id().id(),
+                    "Trip must contain at least two stop times; found " + tripStopTimes.size()
+                );
+            }
+
+            Integer previousSequence = null;
+            Integer previousDeparture = null;
+            for (int index = 0; index < tripStopTimes.size(); index++) {
+                StopTime stopTime = tripStopTimes.get(index);
+                String entityId = stopTimeEntityId(stopTime);
+                if (stopTime.stopSequence() < 0) {
+                    throw invalidStopTime(
+                        source, feedId, "stop_time", entityId, "stop_sequence",
+                        Integer.toString(stopTime.stopSequence()),
+                        "stop_sequence must be a non-negative integer"
+                    );
+                }
+                if (previousSequence != null && stopTime.stopSequence() <= previousSequence) {
+                    throw invalidStopTime(
+                        source, feedId, "stop_time", entityId, "stop_sequence",
+                        Integer.toString(stopTime.stopSequence()),
+                        "stop_sequence values must be unique and strictly increasing within a trip"
+                    );
+                }
+
+                boolean arrivalSet = stopTime.arrivalSeconds() != null;
+                boolean departureSet = stopTime.departureSeconds() != null;
+                boolean endpoint = index == 0 || index == tripStopTimes.size() - 1;
+                if (endpoint && (!arrivalSet || !departureSet)) {
+                    throw invalidStopTime(
+                        source, feedId, "stop_time", entityId,
+                        !arrivalSet ? "arrival_time" : "departure_time", UNSPECIFIED,
+                        "The first and last stop times of a trip require both arrival_time and departure_time"
+                    );
+                }
+                if (arrivalSet != departureSet) {
+                    throw invalidStopTime(
+                        source, feedId, "stop_time", entityId,
+                        !arrivalSet ? "arrival_time" : "departure_time", UNSPECIFIED,
+                        "Intermediate stop times must provide both arrival_time and departure_time or neither"
+                    );
+                }
+                if (arrivalSet) {
+                    if (stopTime.departureSeconds() < stopTime.arrivalSeconds()) {
+                        throw invalidStopTime(
+                            source, feedId, "stop_time", entityId, "departure_time",
+                            Integer.toString(stopTime.departureSeconds()),
+                            "departure_time must not be earlier than arrival_time"
+                        );
+                    }
+                    if (previousDeparture != null && stopTime.arrivalSeconds() < previousDeparture) {
+                        throw invalidStopTime(
+                            source, feedId, "stop_time", entityId, "arrival_time",
+                            Integer.toString(stopTime.arrivalSeconds()),
+                            "Known stop times must not move backward within a trip"
+                        );
+                    }
+                    previousDeparture = stopTime.departureSeconds();
+                }
+                previousSequence = stopTime.stopSequence();
+            }
+        }
+    }
+
+    private static GtfsLoadException invalidStopTime(
+        Path source,
+        String feedId,
+        String entityType,
+        String entityId,
+        String field,
+        String value,
+        String detail
+    ) {
+        return failure(
+            source,
+            feedId,
+            GtfsDiagnosticCode.INVALID_STOP_TIME,
+            "stop_times.txt",
+            entityType,
+            entityId,
+            field,
+            value,
+            detail
+        );
     }
 
     private static void validateRelationships(

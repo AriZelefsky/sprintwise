@@ -126,7 +126,8 @@ public final class GtfsIndex {
     /**
      * Finds the next departures at a stop. Unknown stops return an empty list.
      * The per-stop schedule is reached directly, binary-searched by GTFS seconds,
-     * and evaluated for both the civil date and previous service date.
+     * and evaluated for every service date capable of contributing a departure,
+     * based on the feed's maximum GTFS time.
      */
     public List<TimetableDeparture> nextDepartures(
         FeedScopedId stopId,
