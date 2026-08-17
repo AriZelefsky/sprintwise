@@ -1,4 +1,4 @@
-# SprintWise current architecture
+# SprintWise current architecture (post stage 1 completiong)
 
 (Reminder to hit command shift v to view in markdown view)
 
