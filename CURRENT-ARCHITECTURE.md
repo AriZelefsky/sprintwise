@@ -1,5 +1,7 @@
 # SprintWise current architecture
 
+(Reminder to hit command shift v to view in markdown view)
+
 This document explains the repository as it exists after Stage 1. It is meant
 to let my incoming partner @ Zach Rosenberg gain a thorough and deep understanding of the project as it stands.
 
