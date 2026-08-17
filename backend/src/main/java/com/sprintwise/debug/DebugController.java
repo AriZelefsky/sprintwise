@@ -4,7 +4,7 @@ import com.sprintwise.index.GtfsIndex;
 import com.sprintwise.model.FeedScopedId;
 import com.sprintwise.model.Stop;
 import com.sprintwise.model.Trip;
-import com.sprintwise.service.TransitDataService;
+import com.sprintwise.service.TransitFeedCatalog;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -23,16 +23,16 @@ public final class DebugController {
     private static final int DEFAULT_LIMIT = 20;
     private static final int MAX_LIMIT = 100;
 
-    private final TransitDataService transitData;
+    private final TransitFeedCatalog feeds;
 
-    public DebugController(TransitDataService transitData) {
-        this.transitData = transitData;
+    public DebugController(TransitFeedCatalog feeds) {
+        this.feeds = feeds;
     }
 
     @GetMapping("/stop/{id}")
     public StopDebugResponse stop(@PathVariable String id) {
         FeedScopedId stopId = parseId(id);
-        Stop stop = index().stop(stopId).orElseThrow(() ->
+        Stop stop = index(stopId.feedId()).stop(stopId).orElseThrow(() ->
             new DebugNotFoundException("Unknown stop " + stopId)
         );
         return StopDebugResponse.from(stop);
@@ -45,7 +45,7 @@ public final class DebugController {
         @RequestParam(defaultValue = "20") int limit
     ) {
         FeedScopedId parsedStopId = parseId(stopId);
-        GtfsIndex index = index();
+        GtfsIndex index = index(parsedStopId.feedId());
         if (index.stop(parsedStopId).isEmpty()) {
             throw new DebugNotFoundException("Unknown stop " + parsedStopId);
         }
@@ -64,7 +64,7 @@ public final class DebugController {
     @GetMapping("/trip/{id}")
     public TripDebugResponse trip(@PathVariable String id) {
         FeedScopedId tripId = parseId(id);
-        GtfsIndex index = index();
+        GtfsIndex index = index(tripId.feedId());
         Trip trip = index.trip(tripId).orElseThrow(() ->
             new DebugNotFoundException("Unknown trip " + tripId)
         );
@@ -72,9 +72,12 @@ public final class DebugController {
     }
 
     @GetMapping("/services")
-    public ActiveServicesDebugResponse services(@RequestParam String date) {
+    public ActiveServicesDebugResponse services(
+        @RequestParam String feedId,
+        @RequestParam String date
+    ) {
         LocalDate serviceDate = parseDate(date);
-        GtfsIndex index = index();
+        GtfsIndex index = index(parseFeedId(feedId));
         return ActiveServicesDebugResponse.from(
             index.feedId(),
             serviceDate,
@@ -82,8 +85,8 @@ public final class DebugController {
         );
     }
 
-    private GtfsIndex index() {
-        return transitData.index();
+    private GtfsIndex index(String feedId) {
+        return feeds.index(feedId);
     }
 
     private static FeedScopedId parseId(String value) {
@@ -99,6 +102,16 @@ public final class DebugController {
         } catch (IllegalArgumentException exception) {
             throw new DebugBadRequestException("malformed_id", exception.getMessage());
         }
+    }
+
+    private static String parseFeedId(String value) {
+        if (value == null || value.isBlank() || value.contains(":")) {
+            throw new DebugBadRequestException(
+                "malformed_feed_id",
+                "feedId must be a nonblank namespace without a colon; received " + value
+            );
+        }
+        return value;
     }
 
     private static Instant parseTimestamp(String value) {

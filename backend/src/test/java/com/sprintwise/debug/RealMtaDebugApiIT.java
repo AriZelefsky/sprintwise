@@ -7,7 +7,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.sprintwise.service.TransitDataService;
+import com.sprintwise.service.TransitFeedCatalog;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Assumptions;
@@ -33,12 +33,15 @@ class RealMtaDebugApiIT {
     private MockMvc mockMvc;
 
     @Autowired
-    private TransitDataService transitData;
+    private TransitFeedCatalog feeds;
 
     @DynamicPropertySource
     static void frozenMtaProperties(DynamicPropertyRegistry registry) {
-        registry.add("sprintwise.gtfs.mta-path", GTFS_PATH::toString);
-        registry.add("sprintwise.gtfs.feed-id", () -> "mta");
+        registry.add("sprintwise.gtfs.feeds[0].id", () -> "mta");
+        registry.add("sprintwise.gtfs.feeds[0].path", GTFS_PATH::toString);
+        registry.add("sprintwise.gtfs.feeds[0].enabled", () -> "true");
+        registry.add("sprintwise.gtfs.feeds[1].id", () -> "lirr");
+        registry.add("sprintwise.gtfs.feeds[1].enabled", () -> "false");
     }
 
     @Test
@@ -47,7 +50,7 @@ class RealMtaDebugApiIT {
             Files.isDirectory(GTFS_PATH),
             () -> "Frozen MTA GTFS directory is unavailable: " + GTFS_PATH
         );
-        assertTrue(transitData.isAvailable());
+        assertTrue(feeds.entry("mta").isAvailable());
 
         mockMvc.perform(get("/debug/stop/{id}", "mta:101"))
             .andExpect(status().isOk())
@@ -70,7 +73,9 @@ class RealMtaDebugApiIT {
             .andExpect(jsonPath("$.stopTimes", hasSize(38)))
             .andExpect(jsonPath("$.stopTimes[0].stopId").value("mta:101S"));
 
-        mockMvc.perform(get("/debug/services").param("date", "2026-08-13"))
+        mockMvc.perform(get("/debug/services")
+                .param("feedId", "mta")
+                .param("date", "2026-08-13"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.activeServiceIds", hasItem("mta:Weekday")));
     }

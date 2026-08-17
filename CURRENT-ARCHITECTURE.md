@@ -3,7 +3,7 @@
 This document explains the repository as it exists after Stage 1. It is meant
 to let my incoming partner @ Zach Rosenberg gain a thorough and deep understanding of the project as it stands.
 
-Last checked against the working tree: 2026-08-14.
+Last checked against the working tree: 2026-08-16.
 
 ## Transit vocabulary: stop, route, trip, and stop time
 
@@ -139,7 +139,7 @@ SprintWise does **not** route journeys yet.
 
 The completed Stage 1 backend can:
 
-- Read one configured static GTFS feed from a directory.
+- Read independently configured MTA and LIRR static GTFS feeds.
 - Convert parser-owned objects into immutable SprintWise-owned records.
 - Validate stops, routes, trips, stop times, calendars, references, timezones,
   and pickup/drop-off values.
@@ -151,7 +151,7 @@ It cannot yet:
 
 - Plan an origin-to-destination journey.
 - Board a train and scan downstream stops with RAPTOR.
-- Combine MTA subway and LIRR in one SprintWise index.
+- Plan or connect a journey between the independent MTA and LIRR indexes.
 - Use `transfers.txt`, shapes, OSM, GraphHopper, or the OTP graph in its own
   backend search.
 - Perform access, transfer, or egress walking.
@@ -167,34 +167,27 @@ sequence, use `docs/ROUTING-PLAN.md`.
 ## Architecture at a glance
 
 ```text
-Static GTFS directory
-  data/gtfs/mta/                (default)
-  data/gtfs/lirr/               (can be substituted, not co-loaded)
-          |
-          v
-OneBusAwayGtfsLoader            only package allowed to use OneBusAway types
-          |
-          | parse, map, namespace, validate
-          v
-GtfsFeed                        temporary immutable loading boundary
-          |
-          v
-GtfsIndex                       one immutable in-memory index
-  |-- entities by ID
-  |-- ordered stop times by trip
-  |-- trips serving each stop
-  |-- sorted departures by stop
-  |-- ServiceCalendarResolver
-  `-- ServiceTimeResolver
-          |
-          v
-TransitDataService              one Spring singleton; owns success or failure
-          |
-          v
-DebugController                 read-only inspection, not routing
-          |
-          v
-JSON response / Problem Details error
+data/gtfs/mta/                         data/gtfs/lirr/
+      |                                      |
+      +----------- OneBusAwayGtfsLoader -----+
+                          |
+              parse, map, namespace, validate
+                          |
+              +-----------+-----------+
+              |                       |
+       GtfsFeed(mta)             GtfsFeed(lirr)
+       GtfsIndex(mta)            GtfsIndex(lirr)
+              |                       |
+              +-----------+-----------+
+                          |
+               TransitFeedCatalog
+          sorted entries keyed by mta/lirr
+       each owns its feed/index or load failure
+                          |
+                   DebugController
+             namespace selects exactly one index
+                          |
+          JSON response / Problem Details error
 ```
 
 There is no database in this flow. The final state of successfully loaded data
@@ -207,23 +200,29 @@ A restart parses and indexes the static files again.
    `com.sprintwise`.
 2. `application.yml` supplies defaults:
    - Backend port: `8081`.
-   - Feed directory: `../data/gtfs/mta`, relative to `backend/` when using the
-     documented command.
-   - Feed namespace: `mta`.
+   - Enabled feed `mta` at `../data/gtfs/mta`.
+   - Enabled feed `lirr` at `../data/gtfs/lirr`.
 3. Environment variables may override those defaults:
    - `SERVER_PORT`
    - `SPRINTWISE_MTA_GTFS_PATH`
-   - `SPRINTWISE_GTFS_FEED_ID`
+   - `SPRINTWISE_MTA_GTFS_ENABLED`
+   - `SPRINTWISE_LIRR_GTFS_PATH`
+   - `SPRINTWISE_LIRR_GTFS_ENABLED`
 4. Spring binds the GTFS values into `GtfsProperties`.
 5. `TransitConfiguration` constructs a `OneBusAwayGtfsLoader` behind the
    SprintWise `GtfsLoader` interface.
-6. Spring constructs one singleton `TransitDataService`.
-7. The service resolves the configured path to an absolute normalized path,
-   loads the feed once, and immediately builds one `GtfsIndex`.
-8. On success, the service retains that immutable index. Every request reuses
-   it; no request reparses GTFS.
-9. On failure, the service retains a `FeedUnavailableException` instead. The
-   web application stays alive so debug requests can return a useful HTTP 503.
+6. Spring constructs one singleton `TransitFeedCatalog`. Configuration is a
+   list so blank and duplicate feed IDs can be rejected before loading.
+7. For every enabled feed, the catalog normalizes its path, loads it once, and
+   immediately builds that feed's own `GtfsIndex`.
+8. A successful entry retains both its immutable `GtfsFeed` and `GtfsIndex`.
+   Requests reuse them; no request reparses GTFS.
+9. A structured `GtfsLoadException` affects only that feed. Its entry retains
+   one `FeedUnavailableException`, so requests for it return HTTP 503 while
+   other entries remain usable. Unexpected programming/configuration failures
+   still abort startup instead of being mislabeled as bad feed data.
+10. Disabled feeds do not enter the catalog and have the same 404 contract as
+    unknown feed namespaces.
 
 This is eager startup loading, but it is deliberately failure-tolerant at the
 web-application boundary.
@@ -396,8 +395,8 @@ All Stage 1 ingestion failures are fatal. A `WARNING` severity exists in the
 type system, but there is no warning collector or skip-bad-row policy.
 
 `GtfsLoadException` generates its message from the diagnostic and retains the
-original parser cause when one exists. `TransitDataService` wraps and retains
-the failure. `DebugApiExceptionHandler` converts it to HTTP Problem Details with
+original parser cause when one exists. The failed `TransitFeedEntry` wraps and
+retains the failure. `DebugApiExceptionHandler` converts it to Problem Details with
 status 503 and adds the structured diagnostic fields to the JSON response.
 
 OneBusAway sometimes cannot expose the originating row or referring entity. In
@@ -407,8 +406,9 @@ or add a second CSV parser just to recover row numbers.
 ## What remains in memory after loading
 
 `GtfsFeed` is the immutable handoff object from loader to index. Its lists are
-defensive copies, but `TransitDataService` passes it directly into `GtfsIndex`
-and does not keep the wrapper afterward.
+defensive copies. Each available `TransitFeedEntry` deliberately retains both
+the feed aggregate and the corresponding index so later stages can inspect the
+source model without reparsing it.
 
 The long-lived index retains:
 
@@ -483,7 +483,8 @@ The steps are:
 1. `DebugController` requires `feed:id` syntax.
 2. The timestamp must be ISO-8601 with an explicit offset. It is converted to
    an `Instant`; the machine's timezone is not used.
-3. The stop must exist in the loaded feed, and `limit` must be 1 through 100.
+3. The `mta` namespace selects only the MTA catalog entry and index. The stop
+   must exist there, and `limit` must be 1 through 100.
 4. The index directly obtains that stop's sorted departure list. It never scans
    the entire feed.
 5. `ServiceTimeResolver` starts around the query's agency civil date and walks
@@ -536,26 +537,27 @@ departure seconds; it does not yet show pickup/drop-off enums.
 ### Active-service inspection
 
 ```text
-GET /debug/services?date=2026-08-13
+GET /debug/services?feedId=mta&date=2026-08-13
 ```
 
-The explicit date is resolved through weekly calendars plus exception
-overrides. The response contains a deterministic sorted list of namespaced
-service IDs.
+The explicit feed ID selects one catalog entry. The explicit date is resolved
+through that feed's weekly calendars plus exception overrides. The response
+contains a deterministic sorted list of namespaced service IDs.
 
 ### Ordinary API errors
 
 Malformed IDs, dates, timestamps, limits, and missing parameters are request
 errors, not feed-import diagnostics. `DebugApiExceptionHandler` returns HTTP
-Problem Details with stable request-level codes. Unknown IDs return 404. Feed
-loading failures return 503.
+Problem Details with stable request-level codes. Unknown resources and
+unknown/disabled feeds return 404. A configured feed whose GTFS load failed
+returns 503 without affecting successful catalog entries.
 
 ## MTA and LIRR today
 
 ### MTA subway
 
-The default backend configuration loads `data/gtfs/mta` with namespace `mta`.
-This is the only feed in the default SprintWise index.
+The default backend configuration loads `data/gtfs/mta` with namespace `mta`
+into its own index.
 
 The frozen integration measurement most recently observed:
 
@@ -568,22 +570,21 @@ The frozen integration measurement most recently observed:
 
 ### LIRR
 
-`data/gtfs/lirr` is present on disk, but it does not flow into the default
-SprintWise backend. It can be loaded **instead of** MTA through the same
-production path:
+The default backend also loads `data/gtfs/lirr` with namespace `lirr` through
+the same production path into a separate index. Either feed can be disabled or
+have its path changed independently:
 
 ```bash
-SPRINTWISE_MTA_GTFS_PATH=../data/gtfs/lirr \
-SPRINTWISE_GTFS_FEED_ID=lirr \
+SPRINTWISE_MTA_GTFS_ENABLED=false \
+SPRINTWISE_LIRR_GTFS_PATH=../data/gtfs/lirr \
 mvn spring-boot:run
 ```
 
-The environment variable still says `MTA` because the current configuration
-property is named `mtaPath`; functionally it accepts any GTFS directory.
-
-There is currently no multi-feed container or combined MTA+LIRR `GtfsIndex`.
-That work is deferred. Feed-namespaced IDs were introduced now so IDs will not
-collide when multi-feed support is eventually designed.
+`TransitFeedCatalog` is a multi-feed **container**, but there is deliberately no
+combined MTA+LIRR `GtfsIndex`. It does not infer that equally named or nearby
+stops correspond, and it does not create transfers. Feed-namespaced IDs let
+both datasets coexist without collisions; station matching and cross-feed
+routing remain later work.
 
 ### OTP's separate view
 
@@ -661,6 +662,15 @@ time, and approximate retained heap, and it performs known real debug lookups.
 Normal unit tests do not require frozen real data. Integration tests use JUnit
 assumptions to skip when the configured directory is absent.
 
+### Frozen LIRR and combined-catalog integration
+
+The `real-lirr-stage1` profile proves the complete LIRR snapshot travels through
+the ordinary loader/index path. The `real-mta-lirr-catalog` profile loads both
+snapshots into one `TransitFeedCatalog`, while retaining two feeds and two
+indexes. It verifies simultaneous known lookups, namespace isolation, combined
+memory use, and construction under `-Xmx2G`. Neither profile creates a transfer
+or combined route.
+
 ### Golden data
 
 `otp-real-baseline.json` stores normalized expected facts for real reference
@@ -700,7 +710,7 @@ application architecture.
 | `backend/src/main/java/com/sprintwise/gtfs/time/` | GTFS service time/date/instant conversion |
 | `backend/src/main/java/com/sprintwise/model/` | Immutable SprintWise transit-domain records |
 | `backend/src/main/java/com/sprintwise/index/` | Immutable lookup structures and resolved departure types |
-| `backend/src/main/java/com/sprintwise/service/` | Application-lifetime owner of the loaded index or load failure |
+| `backend/src/main/java/com/sprintwise/service/` | Application-lifetime catalog of independent feed/index snapshots or failures |
 | `backend/src/main/resources/` | Runtime Spring configuration |
 | `backend/src/test/` | Backend test code and test-only data |
 | `backend/src/test/java/` | JUnit Java source root |
@@ -712,7 +722,7 @@ application architecture.
 | `backend/src/test/java/com/sprintwise/gtfs/calendar/` | Weekly and exception-calendar tests |
 | `backend/src/test/java/com/sprintwise/gtfs/time/` | Midnight, maximum-span, timezone, and DST tests |
 | `backend/src/test/java/com/sprintwise/index/` | Timetable index unit tests and real-feed memory integration test |
-| `backend/src/test/java/com/sprintwise/service/` | Single-load and retained-failure tests |
+| `backend/src/test/java/com/sprintwise/service/` | Multi-feed catalog, failure-isolation, and combined-real-feed tests |
 | `backend/src/test/resources/` | Test inputs copied onto the Maven test classpath |
 | `backend/src/test/resources/fixtures/` | Parent for owned synthetic fixtures |
 | `backend/src/test/resources/fixtures/synthetic-gtfs/` | Tiny valid GTFS feed plus future mock walking data |
@@ -729,7 +739,7 @@ application architecture.
 | `data/` | Frozen local OSM, GTFS, OTP configuration, and built graph |
 | `data/gtfs/` | Parent directory for static transit feeds |
 | `data/gtfs/mta/` | Frozen MTA subway GTFS snapshot; default backend feed |
-| `data/gtfs/lirr/` | Frozen LIRR GTFS snapshot; present but not co-loaded by backend |
+| `data/gtfs/lirr/` | Frozen LIRR GTFS snapshot; independently co-loaded by default |
 | `docs/` | Routing plan and golden-query specification |
 | `frontend/` | Placeholder frontend package; no committed application source yet |
 | `otp/` | Downloaded OTP executable JAR |
@@ -752,17 +762,19 @@ application architecture.
 
 | File | What it does |
 |---|---|
-| `backend/pom.xml` | Defines Spring Boot 3.5.16, Java 25, OneBusAway GTFS 14.2.0, tests, Java-version enforcement, packaging, and the `real-mta-index` integration profile |
-| `backend/src/main/resources/application.yml` | Sets port 8081 and configurable single-feed path/namespace defaults |
+| `backend/pom.xml` | Defines Java/Spring/OneBusAway plus isolated MTA, LIRR, and combined-catalog real-data profiles |
+| `backend/src/main/resources/application.yml` | Sets port 8081 and independent MTA/LIRR paths and enabled flags |
 | `backend/src/main/java/com/sprintwise/SprintWiseApplication.java` | Spring Boot entry point and component-scan root |
 
 ### Configuration and service ownership
 
 | File | What it does |
 |---|---|
-| `config/GtfsProperties.java` | Mutable Spring binding object for the configured path and feed namespace |
-| `config/TransitConfiguration.java` | Creates the parser-neutral loader bean and singleton `TransitDataService` |
-| `service/TransitDataService.java` | Loads/builds exactly once, logs statistics, and returns the index or repeats the retained failure |
+| `config/GtfsProperties.java` | Spring binding object for the list of feed IDs, paths, and enabled flags |
+| `config/TransitConfiguration.java` | Creates the parser-neutral loader and singleton `TransitFeedCatalog` |
+| `service/TransitFeedCatalog.java` | Validates configuration, loads enabled feeds once, sorts entries, and dispatches feed/index access |
+| `service/TransitFeedEntry.java` | Immutable available feed/index pair or retained unavailable-feed state, including construction timing |
+| `service/UnknownFeedException.java` | Signals the documented unknown-or-disabled feed contract |
 | `service/FeedUnavailableException.java` | Carries feed ID, source path, cause, and optional structured diagnostic after startup loading fails |
 
 ### GTFS boundary and diagnostics
@@ -830,9 +842,11 @@ application architecture.
 | `gtfs/calendar/ServiceCalendarResolverTest.java` | Weekday/weekend rules and exception additions/removals |
 | `gtfs/time/ServiceTimeResolverTest.java` | Agency timezone, `24:xx`, feed-derived `49:xx` window, spring/fall DST, and bounded date candidates |
 | `index/GtfsIndexTest.java` | Deterministic entity order, daytime/after-midnight/49-hour lookup, calendar filtering, tie-breaking, empty contracts, and immutability |
-| `service/TransitDataServiceTest.java` | One-time loading/index construction and repeatable retained failure behavior |
+| `service/TransitFeedCatalogTest.java` | Two-feed collisions, ordering, immutability, one-time loading, disabled feeds, and failure isolation |
+| `service/CombinedFrozenFeedsCatalogIT.java` | Simultaneous frozen MTA/LIRR indexes fit under 2 GiB and preserve namespace isolation |
 | `debug/DebugControllerTest.java` | All debug endpoints and their 400/404/503 JSON contracts using synthetic production loading |
 | `index/RealMtaIndexSizeIT.java` | Frozen MTA fits under `-Xmx2G` and reports entity, time, heap, and duplication measurements |
+| `index/RealLirrStage1CompatibilityIT.java` | Frozen LIRR loader/index compatibility, extended-time behavior, references, and memory measurements |
 | `debug/RealMtaDebugApiIT.java` | Known real stop, departure, trip, and service lookups work through Spring HTTP components |
 
 ### Synthetic and golden resources
@@ -922,7 +936,8 @@ permanent architecture.
 ## Known limitations and honest next boundaries
 
 - Human review of Stage 1 is still pending.
-- Only one configured feed is loaded at a time.
+- MTA and LIRR coexist, but there is no station-correspondence model or
+  cross-feed transfer/routing logic.
 - No trip-pattern or compact integer/array RAPTOR index exists yet.
 - Pickup/drop-off semantics are retained but not applied to a routing decision.
 - Pickup/drop-off fields are not present in current trip debug JSON.

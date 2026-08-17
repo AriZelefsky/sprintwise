@@ -2,7 +2,7 @@ package com.sprintwise.config;
 
 import com.sprintwise.gtfs.GtfsLoader;
 import com.sprintwise.gtfs.onebusaway.OneBusAwayGtfsLoader;
-import com.sprintwise.service.TransitDataService;
+import com.sprintwise.service.TransitFeedCatalog;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -17,7 +17,7 @@ public class TransitConfiguration {
     }
 
     @Bean
-    TransitDataService transitDataService(GtfsLoader loader, GtfsProperties properties) {
-        return new TransitDataService(loader, properties);
+    TransitFeedCatalog transitFeedCatalog(GtfsLoader loader, GtfsProperties properties) {
+        return new TransitFeedCatalog(loader, properties);
     }
 }

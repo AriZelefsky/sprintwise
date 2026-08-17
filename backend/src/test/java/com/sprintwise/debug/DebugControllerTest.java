@@ -8,11 +8,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.sprintwise.config.GtfsProperties;
+import com.sprintwise.config.GtfsProperties.FeedProperties;
 import com.sprintwise.gtfs.onebusaway.OneBusAwayGtfsLoader;
-import com.sprintwise.service.TransitDataService;
+import com.sprintwise.service.TransitFeedCatalog;
 import java.io.IOException;
 import java.net.URISyntaxException;
 import java.nio.file.Path;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -34,32 +36,54 @@ class DebugControllerTest {
 
     @DynamicPropertySource
     static void syntheticGtfsProperties(DynamicPropertyRegistry registry) {
-        registry.add("sprintwise.gtfs.mta-path", FIXTURE::toString);
-        registry.add("sprintwise.gtfs.feed-id", () -> "synthetic");
+        registry.add("sprintwise.gtfs.feeds[0].id", () -> "mta");
+        registry.add("sprintwise.gtfs.feeds[0].path", FIXTURE::toString);
+        registry.add("sprintwise.gtfs.feeds[0].enabled", () -> "true");
+        registry.add("sprintwise.gtfs.feeds[1].id", () -> "lirr");
+        registry.add("sprintwise.gtfs.feeds[1].path", FIXTURE::toString);
+        registry.add("sprintwise.gtfs.feeds[1].enabled", () -> "true");
     }
 
     @Test
     void looksUpNamespacedStop() throws Exception {
-        mockMvc.perform(get("/debug/stop/{id}", "synthetic:A"))
+        mockMvc.perform(get("/debug/stop/{id}", "mta:A"))
             .andExpect(status().isOk())
             .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
-            .andExpect(jsonPath("$.id").value("synthetic:A"))
+            .andExpect(jsonPath("$.id").value("mta:A"))
             .andExpect(jsonPath("$.name").value("Alpha"))
             .andExpect(jsonPath("$.latitude").value(40.0))
             .andExpect(jsonPath("$.parentStationId").doesNotExist());
     }
 
     @Test
+    void dispatchesIdenticalRawIdsToIndependentFeeds() throws Exception {
+        mockMvc.perform(get("/debug/stop/{id}", "mta:A"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.id").value("mta:A"));
+
+        mockMvc.perform(get("/debug/stop/{id}", "lirr:A"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.id").value("lirr:A"));
+
+        mockMvc.perform(get("/debug/departures")
+                .param("stopId", "lirr:A")
+                .param("at", "2026-08-14T00:04:00-04:00")
+                .param("limit", "1"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[0].tripId").value("lirr:NIGHT"));
+    }
+
+    @Test
     void listsPreviousServiceDayDepartureForExplicitTimestamp() throws Exception {
         mockMvc.perform(get("/debug/departures")
-                .param("stopId", "synthetic:A")
+                .param("stopId", "mta:A")
                 .param("at", "2026-08-14T00:04:00-04:00")
                 .param("limit", "1"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$", hasSize(1)))
-            .andExpect(jsonPath("$[0].tripId").value("synthetic:NIGHT"))
-            .andExpect(jsonPath("$[0].routeId").value("synthetic:DIRECT"))
-            .andExpect(jsonPath("$[0].serviceId").value("synthetic:WEEKDAY"))
+            .andExpect(jsonPath("$[0].tripId").value("mta:NIGHT"))
+            .andExpect(jsonPath("$[0].routeId").value("mta:DIRECT"))
+            .andExpect(jsonPath("$[0].serviceId").value("mta:WEEKDAY"))
             .andExpect(jsonPath("$[0].serviceDate").value("2026-08-13"))
             .andExpect(jsonPath("$[0].departureSeconds").value(86_700))
             .andExpect(jsonPath("$[0].departureTime").value("2026-08-14T04:05:00Z"));
@@ -67,43 +91,45 @@ class DebugControllerTest {
 
     @Test
     void inspectsTripWithOrderedStopTimes() throws Exception {
-        mockMvc.perform(get("/debug/trip/{id}", "synthetic:NIGHT"))
+        mockMvc.perform(get("/debug/trip/{id}", "mta:NIGHT"))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.id").value("synthetic:NIGHT"))
-            .andExpect(jsonPath("$.routeId").value("synthetic:DIRECT"))
+            .andExpect(jsonPath("$.id").value("mta:NIGHT"))
+            .andExpect(jsonPath("$.routeId").value("mta:DIRECT"))
             .andExpect(jsonPath("$.stopTimes", hasSize(2)))
-            .andExpect(jsonPath("$.stopTimes[*].stopId", contains("synthetic:A", "synthetic:C")))
+            .andExpect(jsonPath("$.stopTimes[*].stopId", contains("mta:A", "mta:C")))
             .andExpect(jsonPath("$.stopTimes[*].stopSequence", contains(1, 2)))
             .andExpect(jsonPath("$.stopTimes[*].departureSeconds", contains(86_700, 87_300)));
     }
 
     @Test
     void inspectsActiveServicesForDate() throws Exception {
-        mockMvc.perform(get("/debug/services").param("date", "2026-08-13"))
+        mockMvc.perform(get("/debug/services")
+                .param("feedId", "lirr")
+                .param("date", "2026-08-13"))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.feedId").value("synthetic"))
+            .andExpect(jsonPath("$.feedId").value("lirr"))
             .andExpect(jsonPath("$.date").value("2026-08-13"))
             .andExpect(jsonPath(
                 "$.activeServiceIds",
-                contains("synthetic:DIRECT_CASE", "synthetic:SPECIAL", "synthetic:WEEKDAY")
+                contains("lirr:DIRECT_CASE", "lirr:SPECIAL", "lirr:WEEKDAY")
             ));
     }
 
     @Test
     void returnsClearErrorsForUnknownAndMalformedRequests() throws Exception {
-        mockMvc.perform(get("/debug/stop/{id}", "synthetic:UNKNOWN"))
+        mockMvc.perform(get("/debug/stop/{id}", "mta:UNKNOWN"))
             .andExpect(status().isNotFound())
             .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
             .andExpect(jsonPath("$.code").value("not_found"))
-            .andExpect(jsonPath("$.detail").value("Unknown stop synthetic:UNKNOWN"));
+            .andExpect(jsonPath("$.detail").value("Unknown stop mta:UNKNOWN"));
 
-        mockMvc.perform(get("/debug/trip/{id}", "synthetic:UNKNOWN"))
+        mockMvc.perform(get("/debug/trip/{id}", "mta:UNKNOWN"))
             .andExpect(status().isNotFound())
             .andExpect(jsonPath("$.code").value("not_found"))
-            .andExpect(jsonPath("$.detail").value("Unknown trip synthetic:UNKNOWN"));
+            .andExpect(jsonPath("$.detail").value("Unknown trip mta:UNKNOWN"));
 
         mockMvc.perform(get("/debug/departures")
-                .param("stopId", "synthetic:UNKNOWN")
+                .param("stopId", "mta:UNKNOWN")
                 .param("at", "2026-08-13T08:00:00-04:00"))
             .andExpect(status().isNotFound())
             .andExpect(jsonPath("$.code").value("not_found"));
@@ -113,35 +139,55 @@ class DebugControllerTest {
             .andExpect(jsonPath("$.code").value("malformed_id"));
 
         mockMvc.perform(get("/debug/departures")
-                .param("stopId", "synthetic:A")
+                .param("stopId", "mta:A")
                 .param("at", "2026-08-13T08:00:00"))
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.code").value("malformed_timestamp"));
 
         mockMvc.perform(get("/debug/departures")
-                .param("stopId", "synthetic:A")
+                .param("stopId", "mta:A")
                 .param("at", "2026-08-13T08:00:00-04:00")
                 .param("limit", "101"))
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.code").value("invalid_limit"));
 
-        mockMvc.perform(get("/debug/departures").param("stopId", "synthetic:A"))
+        mockMvc.perform(get("/debug/departures").param("stopId", "mta:A"))
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.code").value("missing_parameter"));
 
-        mockMvc.perform(get("/debug/services").param("date", "08/13/2026"))
+        mockMvc.perform(get("/debug/services")
+                .param("feedId", "mta")
+                .param("date", "08/13/2026"))
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.code").value("malformed_date"));
+
+        mockMvc.perform(get("/debug/stop/{id}", "unknown:A"))
+            .andExpect(status().isNotFound())
+            .andExpect(jsonPath("$.code").value("not_found"))
+            .andExpect(jsonPath("$.feedId").value("unknown"));
+
+        mockMvc.perform(get("/debug/services")
+                .param("feedId", "bad:id")
+                .param("date", "2026-08-13"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("malformed_feed_id"));
+
+        mockMvc.perform(get("/debug/services").param("date", "2026-08-13"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("missing_parameter"));
     }
 
     @Test
     void returnsJsonServiceUnavailableWhenConfiguredFeedCannotLoad() throws Exception {
         var properties = new GtfsProperties();
-        properties.setFeedId("missing");
-        properties.setMtaPath(FIXTURE.resolve("does-not-exist"));
-        var unavailable = new TransitDataService(new OneBusAwayGtfsLoader(), properties);
+        properties.setFeeds(List.of(
+            new FeedProperties("available", FIXTURE, true),
+            new FeedProperties("missing", FIXTURE.resolve("does-not-exist"), true),
+            new FeedProperties("disabled", null, false)
+        ));
+        var catalog = new TransitFeedCatalog(new OneBusAwayGtfsLoader(), properties);
         MockMvc unavailableMvc = MockMvcBuilders
-            .standaloneSetup(new DebugController(unavailable))
+            .standaloneSetup(new DebugController(catalog))
             .setControllerAdvice(new DebugApiExceptionHandler())
             .build();
 
@@ -160,6 +206,14 @@ class DebugControllerTest {
             .andExpect(jsonPath("$.source").value(
                 FIXTURE.resolve("does-not-exist").toAbsolutePath().normalize().toString()
             ));
+
+        unavailableMvc.perform(get("/debug/stop/{id}", "available:A"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.id").value("available:A"));
+
+        unavailableMvc.perform(get("/debug/stop/{id}", "disabled:A"))
+            .andExpect(status().isNotFound())
+            .andExpect(jsonPath("$.code").value("not_found"));
     }
 
     private static Path fixtureDirectoryUnchecked() {

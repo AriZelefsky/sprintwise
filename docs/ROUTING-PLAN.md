@@ -266,8 +266,9 @@ Each phase: **goal → build → done when → explicitly defer**.
 
 ### Phase 1 — GTFS index (Java)
 
-**Implementation status:** Stage/Phase 1 is implementation-complete, pending
-human review. A computerized Stage 1 review was performed; its remaining
+**Implementation status:** Stage/Phase 1, including Stage 1E independent MTA
+and LIRR loading, is implementation-complete, pending human review. A
+computerized Stage 1 review was performed; its remaining
 timetable-foundation findings (pickup/drop-off semantics, comprehensive
 stop-time validation, and feed-derived maximum-trip-span handling) have been
 resolved. Do not begin Stage 2 until the pending human review is complete or
@@ -278,7 +279,7 @@ its remaining risks are explicitly accepted.
 **Build:**
 
 - Package layout under `backend/src/main/java/.../`:
-  - `gtfs/` — loader for `data/gtfs/mta/` (add `lirr/` in Phase 4)
+  - `gtfs/` — shared loader for `data/gtfs/mta/` and `data/gtfs/lirr/`
   - `model/` — `Stop`, `Route`, `Trip`, `StopTime`, `ServiceCalendar`
   - `index/GtfsIndex` — structures below
 - Index:
@@ -286,6 +287,18 @@ its remaining risks are explicitly accepted.
   - trips and departures serving each stop at a given time
   - `stopTimesForTrip`
   - active services for `LocalDate` / `LocalDateTime`
+- Stage 1E multi-feed boundary:
+  - Load MTA as namespace `mta` and LIRR as namespace `lirr` through the same
+    production loader.
+  - Keep one complete `GtfsFeed` and one independent `GtfsIndex` per feed in a
+    sorted, immutable `TransitFeedCatalog`; never merge the two feeds.
+  - Dispatch debug stop, trip, departure, and service inspection to the index
+    selected by the explicit feed namespace.
+  - Treat GTFS corruption independently: one unavailable feed retains its
+    structured diagnostic without preventing another feed from being queried.
+    Unknown and disabled feeds are 404; malformed requests are 400.
+  - Keep station correspondence, `transfers.txt`, cross-feed transfer edges,
+    and combined MTA-LIRR journey planning deferred to later routing phases.
 - Preserve each `trip_id` as one complete ordered run. For example, a train
   serving five stops remains one `Trip` with five `StopTime` records; it is not
   split into four adjacent-stop trips.
@@ -309,6 +322,8 @@ its remaining risks are explicitly accepted.
 - Debug API:
   - `GET /debug/stop/{id}`
   - `GET /debug/departures?stopId=&at=`
+  - `GET /debug/trip/{id}`
+  - `GET /debug/services?feedId=&date=`
 
 **Done when:**
 
@@ -376,7 +391,9 @@ ordered trips and access semantics those later structures will consume.
 **Build:**
 
 - Replace single best label per stop with **bags**; criteria: `(arrivalTime, numTransfers)` or `(arrivalTime, totalWalkSec)`
-- Full MTA + LIRR in `GtfsIndex`
+- Consume the independent MTA and LIRR indexes from `TransitFeedCatalog`;
+  cross-feed station correspondence and transfer edges must be designed
+  explicitly rather than merging the source feeds
 - `maxRounds` / max transfers cap
 - Target prune on best complete arrival at `END`
 

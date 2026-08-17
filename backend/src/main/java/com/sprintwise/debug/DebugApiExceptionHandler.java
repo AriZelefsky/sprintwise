@@ -3,6 +3,7 @@ package com.sprintwise.debug;
 import com.sprintwise.gtfs.GtfsImportDiagnostic;
 import com.sprintwise.gtfs.GtfsLoadException;
 import com.sprintwise.service.FeedUnavailableException;
+import com.sprintwise.service.UnknownFeedException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.MissingServletRequestParameterException;
@@ -21,6 +22,18 @@ public final class DebugApiExceptionHandler {
     @ExceptionHandler(DebugNotFoundException.class)
     ProblemDetail notFound(DebugNotFoundException exception) {
         return problem(HttpStatus.NOT_FOUND, "Debug resource not found", exception.getMessage(), "not_found");
+    }
+
+    @ExceptionHandler(UnknownFeedException.class)
+    ProblemDetail unknownFeed(UnknownFeedException exception) {
+        ProblemDetail problem = problem(
+            HttpStatus.NOT_FOUND,
+            "Debug feed not found",
+            exception.getMessage(),
+            "not_found"
+        );
+        problem.setProperty("feedId", exception.feedId());
+        return problem;
     }
 
     @ExceptionHandler(MissingServletRequestParameterException.class)

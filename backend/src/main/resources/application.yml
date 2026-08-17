@@ -3,5 +3,10 @@ server:
 
 sprintwise:
   gtfs:
-    mta-path: ${SPRINTWISE_MTA_GTFS_PATH:../data/gtfs/mta}
-    feed-id: ${SPRINTWISE_GTFS_FEED_ID:mta}
+    feeds:
+      - id: mta
+        path: ${SPRINTWISE_MTA_GTFS_PATH:../data/gtfs/mta}
+        enabled: ${SPRINTWISE_MTA_GTFS_ENABLED:true}
+      - id: lirr
+        path: ${SPRINTWISE_LIRR_GTFS_PATH:../data/gtfs/lirr}
+        enabled: ${SPRINTWISE_LIRR_GTFS_ENABLED:true}
