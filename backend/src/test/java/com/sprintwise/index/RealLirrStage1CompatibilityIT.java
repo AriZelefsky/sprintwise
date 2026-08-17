@@ -44,6 +44,12 @@ class RealLirrStage1CompatibilityIT {
     private static final int PROOF_DEPARTURE_SECONDS = 8 * 3_600 + 5 * 60;
     private static final Instant PROOF_QUERY = Instant.parse("2026-08-13T12:04:00Z");
     private static final Instant PROOF_DEPARTURE_INSTANT = Instant.parse("2026-08-13T12:05:00Z");
+    private static final FeedScopedId EXTENDED_TIME_TRIP = id("GO201_26_21");
+    private static final FeedScopedId EXTENDED_TIME_STOP = id("157");
+    private static final LocalDate EXTENDED_TIME_SERVICE_DATE = LocalDate.of(2026, 8, 14);
+    private static final int EXTENDED_TIME_SECONDS = 24 * 3_600 + 4 * 60;
+    private static final Instant EXTENDED_TIME_QUERY = Instant.parse("2026-08-15T04:03:00Z");
+    private static final Instant EXTENDED_TIME_INSTANT = Instant.parse("2026-08-15T04:04:00Z");
     private static final Set<String> EXPECTED_TABLES = Set.of(
         "agency.txt",
         "calendar_dates.txt",
@@ -136,6 +142,7 @@ class RealLirrStage1CompatibilityIT {
         assertEquals(feed.routes().size(), index.stats().routeCount());
         assertEquals(feed.trips().size(), index.stats().tripCount());
         assertEquals(feed.stopTimes().size(), index.stats().stopTimeReferenceCount());
+        assertEquals(feed.stopTimes().size(), index.stats().scheduledDepartureCount());
 
         Trip proofTrip = index.trip(PROOF_TRIP).orElseThrow();
         assertEquals(PROOF_ROUTE, proofTrip.routeId());
@@ -157,7 +164,8 @@ class RealLirrStage1CompatibilityIT {
         assertFalse(activeServices.isEmpty());
         assertTrue(activeServices.contains(PROOF_SERVICE));
 
-        TimetableDeparture proofDeparture = index.nextDepartures(PROOF_STOP, PROOF_QUERY, 100)
+        List<TimetableDeparture> proofDepartures = index.nextDepartures(PROOF_STOP, PROOF_QUERY, 100);
+        TimetableDeparture proofDeparture = proofDepartures
             .stream()
             .filter(departure -> departure.tripId().equals(PROOF_TRIP))
             .findFirst()
@@ -171,6 +179,19 @@ class RealLirrStage1CompatibilityIT {
         assertEquals(PROOF_DEPARTURE_INSTANT, proofDeparture.departureInstant());
         assertEquals(timeResolver.toInstant(proofDeparture.serviceTime()), proofDeparture.departureInstant());
 
+        TimetableDeparture extendedTimeDeparture = index.nextDepartures(
+            EXTENDED_TIME_STOP,
+            EXTENDED_TIME_QUERY,
+            100
+        ).stream()
+            .filter(departure -> departure.tripId().equals(EXTENDED_TIME_TRIP))
+            .findFirst()
+            .orElseThrow();
+        assertEquals(EXTENDED_TIME_SERVICE_DATE, extendedTimeDeparture.serviceTime().serviceDate());
+        assertEquals(EXTENDED_TIME_SECONDS, extendedTimeDeparture.serviceTime().secondsSinceServiceDayStart());
+        assertEquals(EXTENDED_TIME_INSTANT, extendedTimeDeparture.departureInstant());
+        assertEquals(timeResolver.toInstant(extendedTimeDeparture.serviceTime()), EXTENDED_TIME_INSTANT);
+
         List<?> immutableFeedStops = feed.stops();
         assertThrows(UnsupportedOperationException.class, immutableFeedStops::clear);
         assertThrows(UnsupportedOperationException.class, () -> index.stops().clear());
@@ -180,6 +201,7 @@ class RealLirrStage1CompatibilityIT {
             UnsupportedOperationException.class,
             () -> index.scheduledDeparturesAtStop(PROOF_STOP).clear()
         );
+        assertThrows(UnsupportedOperationException.class, proofDepartures::clear);
 
         int stopTimeCount = feed.stopTimes().size();
         GtfsIndexStats stats = index.stats();
@@ -190,7 +212,7 @@ class RealLirrStage1CompatibilityIT {
         System.out.printf(
             "%nStandalone frozen LIRR Stage 1 compatibility: PASS%n"
                 + "GTFS path: %s%n"
-                + "GTFS input size: %s%n"
+                + "GTFS input size: %,d bytes (%s)%n"
                 + "Tables present: %s%n"
                 + "Tables absent: [calendar.txt]%n"
                 + "Present but deliberately absent from the Stage 1 model: "
@@ -204,10 +226,13 @@ class RealLirrStage1CompatibilityIT {
                 + "Proof trip: %s, route %s, %,d ordered stops%n"
                 + "Proof service date: %s with service %s active%n"
                 + "Proof departure: stop %s, trip %s, route %s, %d GTFS seconds, %s%n"
+                + "Extended-time proof: trip %s on service date %s departs stop %s at "
+                + "%d GTFS seconds / %s%n"
                 + "Load time: %s; index construction time: %s%n"
                 + "Heap: %s baseline, %s after load, %s retained after index (approximate)%n"
                 + "Heap limit: %s%n",
             gtfsPath,
+            gtfsBytes,
             bytes(gtfsBytes),
             tables,
             feedZoneId,
@@ -233,6 +258,11 @@ class RealLirrStage1CompatibilityIT {
             PROOF_ROUTE,
             PROOF_DEPARTURE_SECONDS,
             PROOF_DEPARTURE_INSTANT,
+            EXTENDED_TIME_TRIP,
+            EXTENDED_TIME_SERVICE_DATE,
+            EXTENDED_TIME_STOP,
+            EXTENDED_TIME_SECONDS,
+            EXTENDED_TIME_INSTANT,
             duration(loadDuration),
             duration(indexDuration),
             bytes(baselineHeap),
