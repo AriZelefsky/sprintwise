@@ -398,12 +398,34 @@ The scanner is correctness-first and scans only the selected pattern. With
 dates, and `L` stops, its worst case is `O(B*T*D*L)`; it caches calendar work
 within the call and adds no persistent per-position timetable duplication.
 
+**Stage 2C implementation status:** Transit-only, exact-stop earliest-arrival
+rounds are implemented. Round 0 seeds the origin at an explicit `Instant`;
+round N scans only patterns serving stops strictly improved in round N-1 and
+calls the Stage 2B scanner for every distinct pattern/boarding-stop/arrival
+state. One uninterrupted trip can propagate through all downstream stops in a
+single round. Boarding another trip consumes another round.
+
+Per-round labels are immutable improvement deltas produced with exactly that
+many boardings. The result also retains an immutable global best-label map,
+which represents earliest arrivals using at most the requested number of
+boardings. Dominance is time-only: only a strictly earlier stop arrival creates
+a new search state; equal arrivals use deterministic predecessor selection and
+are not expanded again. Labels retain the incoming ride and predecessor needed
+for Stage 2D, but no itinerary backtrace is exposed yet.
+
+Stage 2C's temporary transfer policy is deliberately narrow: a subsequent trip
+may be boarded only at the exact same compact `FeedScopedId` stop, with zero
+additional transfer time, and a departure exactly equal to arrival is
+catchable. Parent stations, nearby platforms, `transfers.txt`, walking,
+station correspondence, and cross-feed transfer edges remain absent. Search
+stops when no round improves a stop or when the positive round cap is reached.
+
 **Build:**
 
-- Stage 2C onward: exercise a small fixed-stop network with at least two useful
-  patterns; do not embed a one-line corridor restriction into the reusable core
-- Classic RAPTOR: mark stops → scan trips → extend labels → repeat
-- Journey backtrace → `(boardStop, tripId, alightStop, times)`
+- Stage 2C exercises a small fixed-stop network with multiple useful patterns;
+  the reusable round core is not restricted to one corridor
+- Classic RAPTOR is implemented: mark stops → scan patterns → extend labels → repeat
+- Stage 2D: journey backtrace → `(boardStop, tripId, alightStop, times)`
 - `POST /debug/raptor` with `{ fromStopId, toStopId, departAt }`
 
 **Done when:**
