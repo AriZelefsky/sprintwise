@@ -3,6 +3,7 @@ package com.sprintwise.index;
 import com.sprintwise.gtfs.calendar.ServiceCalendarResolver;
 import com.sprintwise.gtfs.time.ServiceTime;
 import com.sprintwise.gtfs.time.ServiceTimeResolver;
+import com.sprintwise.gtfs.validation.GtfsFeedValidator;
 import com.sprintwise.model.FeedScopedId;
 import com.sprintwise.model.GtfsFeed;
 import com.sprintwise.model.Route;
@@ -60,14 +61,14 @@ public final class GtfsIndex {
 
     public GtfsIndex(GtfsFeed feed) {
         Objects.requireNonNull(feed, "feed");
+        GtfsFeedValidator.validate(feed);
         this.feedId = feed.feedId();
         this.stopsById = entitiesById(feed.stops(), Stop::id, "stop");
         this.routesById = entitiesById(feed.routes(), Route::id, "route");
         this.tripsById = entitiesById(feed.trips(), Trip::id, "trip");
-        this.calendarResolver = new ServiceCalendarResolver(feed);
+        this.calendarResolver = ServiceCalendarResolver.forValidatedFeed(feed);
         this.timeResolver = ServiceTimeResolver.forFeed(feed);
 
-        validateTripReferences();
         this.stopTimesByTrip = buildStopTimesByTrip(feed.stopTimes());
         this.tripsByStop = buildTripsByStop(feed.stopTimes());
         this.departuresByStop = buildDeparturesByStop(feed.stopTimes());
@@ -241,30 +242,15 @@ public final class GtfsIndex {
         return low;
     }
 
-    private void validateTripReferences() {
-        for (Trip trip : tripsById.values()) {
-            requireNamespace(trip.id());
-            requireNamespace(trip.routeId());
-            requireNamespace(trip.serviceId());
-            if (!routesById.containsKey(trip.routeId())) {
-                throw new IllegalArgumentException(
-                    "Trip " + trip.id() + " references unknown route " + trip.routeId()
-                );
-            }
-        }
-    }
-
     private Map<FeedScopedId, List<StopTime>> buildStopTimesByTrip(List<StopTime> stopTimes) {
         var mutable = new HashMap<FeedScopedId, List<StopTime>>();
         for (StopTime stopTime : stopTimes) {
-            validateStopTimeReferences(stopTime);
             mutable.computeIfAbsent(stopTime.tripId(), ignored -> new ArrayList<>()).add(stopTime);
         }
 
         var result = new HashMap<FeedScopedId, List<StopTime>>();
         mutable.forEach((tripId, values) -> {
             values.sort(Comparator.comparingInt(StopTime::stopSequence));
-            rejectDuplicateSequences(tripId, values);
             result.put(tripId, List.copyOf(values));
         });
         return Map.copyOf(result);
@@ -313,42 +299,6 @@ public final class GtfsIndex {
         return Map.copyOf(result);
     }
 
-    private void validateStopTimeReferences(StopTime stopTime) {
-        Objects.requireNonNull(stopTime, "stopTime");
-        requireNamespace(stopTime.tripId());
-        requireNamespace(stopTime.stopId());
-        if (!tripsById.containsKey(stopTime.tripId())) {
-            throw new IllegalArgumentException(
-                "Stop time references unknown trip " + stopTime.tripId()
-            );
-        }
-        if (!stopsById.containsKey(stopTime.stopId())) {
-            throw new IllegalArgumentException(
-                "Stop time for " + stopTime.tripId() + " references unknown stop " + stopTime.stopId()
-            );
-        }
-    }
-
-    private void requireNamespace(FeedScopedId id) {
-        Objects.requireNonNull(id, "feed-scoped ID");
-        if (!feedId.equals(id.feedId())) {
-            throw new IllegalArgumentException(
-                "ID " + id + " is outside feed namespace " + feedId
-            );
-        }
-    }
-
-    private static void rejectDuplicateSequences(FeedScopedId tripId, List<StopTime> stopTimes) {
-        for (int index = 1; index < stopTimes.size(); index++) {
-            if (stopTimes.get(index - 1).stopSequence() == stopTimes.get(index).stopSequence()) {
-                throw new IllegalArgumentException(
-                    "Trip " + tripId + " has duplicate stop sequence "
-                        + stopTimes.get(index).stopSequence()
-                );
-            }
-        }
-    }
-
     private <T> NavigableMap<FeedScopedId, T> entitiesById(
         Collection<T> entities,
         Function<T, FeedScopedId> idFunction,
@@ -356,11 +306,11 @@ public final class GtfsIndex {
     ) {
         var result = new TreeMap<FeedScopedId, T>();
         for (T entity : entities) {
-            Objects.requireNonNull(entity, entityName);
             FeedScopedId id = idFunction.apply(entity);
-            requireNamespace(id);
             if (result.putIfAbsent(id, entity) != null) {
-                throw new IllegalArgumentException("Duplicate " + entityName + " ID " + id);
+                throw new IllegalStateException(
+                    "Validated feed contains duplicate " + entityName + " ID " + id
+                );
             }
         }
         return Collections.unmodifiableNavigableMap(result);

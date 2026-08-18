@@ -11,6 +11,7 @@ import com.sprintwise.gtfs.GtfsDiagnosticCode;
 import com.sprintwise.gtfs.GtfsDiagnosticSeverity;
 import com.sprintwise.gtfs.GtfsImportDiagnostic;
 import com.sprintwise.gtfs.GtfsLoadException;
+import com.sprintwise.gtfs.validation.GtfsFeedValidationException;
 import com.sprintwise.model.FeedScopedId;
 import com.sprintwise.model.GtfsFeed;
 import com.sprintwise.model.PickupDropOffType;
@@ -189,10 +190,11 @@ class OneBusAwayGtfsLoaderTest {
         }
         Files.write(stopTimes, lines);
 
-        GtfsImportDiagnostic diagnostic = assertThrows(
+        GtfsLoadException exception = assertThrows(
             GtfsLoadException.class,
             () -> new OneBusAwayGtfsLoader().load(temporaryFeed, FEED_ID)
-        ).diagnostic();
+        );
+        GtfsImportDiagnostic diagnostic = exception.diagnostic();
 
         assertEquals(GtfsDiagnosticCode.INVALID_PICKUP_DROP_OFF_TYPE, diagnostic.code());
         assertEquals("stop_times.txt", diagnostic.sourceFile());
@@ -297,10 +299,11 @@ class OneBusAwayGtfsLoaderTest {
         copyFixtureTo(temporaryFeed);
         appendFiveStopTrip(temporaryFeed, ",09:10:00,,");
 
-        GtfsImportDiagnostic diagnostic = assertThrows(
+        GtfsLoadException exception = assertThrows(
             GtfsLoadException.class,
             () -> new OneBusAwayGtfsLoader().load(temporaryFeed, FEED_ID)
-        ).diagnostic();
+        );
+        GtfsImportDiagnostic diagnostic = exception.diagnostic();
 
         assertEquals(GtfsDiagnosticCode.INVALID_STOP_TIME, diagnostic.code());
         assertEquals("stop_times.txt", diagnostic.sourceFile());
@@ -350,10 +353,11 @@ class OneBusAwayGtfsLoaderTest {
             )
         );
 
-        GtfsImportDiagnostic diagnostic = assertThrows(
+        GtfsLoadException exception = assertThrows(
             GtfsLoadException.class,
             () -> new OneBusAwayGtfsLoader().load(temporaryFeed, FEED_ID)
-        ).diagnostic();
+        );
+        GtfsImportDiagnostic diagnostic = exception.diagnostic();
 
         assertEquals(GtfsDiagnosticCode.MISSING_REQUIRED_REFERENCE, diagnostic.code());
         assertEquals("stops.txt", diagnostic.sourceFile());
@@ -361,6 +365,32 @@ class OneBusAwayGtfsLoaderTest {
         assertEquals("B_RED", diagnostic.entityId());
         assertEquals("parent_station", diagnostic.field());
         assertEquals("MISSING_PARENT", diagnostic.referencedId());
+        assertInstanceOf(GtfsFeedValidationException.class, exception.getCause());
+    }
+
+    @Test
+    void identifiesMissingServiceReferenceFromOneBusAway(@TempDir Path temporaryFeed)
+        throws Exception {
+        copyFixtureTo(temporaryFeed);
+        Path trips = temporaryFeed.resolve("trips.txt");
+        Files.writeString(
+            trips,
+            Files.readString(trips).replace(
+                "RED,WEEKDAY,RED_EARLY,Beta,0",
+                "RED,MISSING_SERVICE,RED_EARLY,Beta,0"
+            )
+        );
+
+        GtfsLoadException exception = assertThrows(
+            GtfsLoadException.class,
+            () -> new OneBusAwayGtfsLoader().load(temporaryFeed, FEED_ID)
+        );
+
+        assertEquals(GtfsDiagnosticCode.MISSING_REQUIRED_REFERENCE, exception.diagnostic().code());
+        assertEquals("trips.txt", exception.diagnostic().sourceFile());
+        assertEquals("service_id", exception.diagnostic().field());
+        assertEquals("MISSING_SERVICE", exception.diagnostic().referencedId());
+        assertNotNull(exception.getCause());
     }
 
     @Test

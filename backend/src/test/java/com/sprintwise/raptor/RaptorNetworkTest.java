@@ -15,6 +15,7 @@ import com.sprintwise.model.FeedScopedId;
 import com.sprintwise.model.GtfsFeed;
 import com.sprintwise.model.PickupDropOffType;
 import com.sprintwise.model.Route;
+import com.sprintwise.model.ServiceCalendar;
 import com.sprintwise.model.Stop;
 import com.sprintwise.model.StopTime;
 import com.sprintwise.model.Trip;
@@ -23,11 +24,14 @@ import com.sprintwise.service.TransitFeedCatalog;
 import java.io.IOException;
 import java.net.URISyntaxException;
 import java.nio.file.Path;
+import java.time.DayOfWeek;
+import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class RaptorNetworkTest {
@@ -345,7 +349,12 @@ class RaptorNetworkTest {
             routes,
             trips,
             stopTimes,
-            List.of(),
+            List.of(new ServiceCalendar(
+                id(feedId, "S"),
+                Set.of(DayOfWeek.MONDAY),
+                LocalDate.of(2026, 1, 1),
+                LocalDate.of(2026, 12, 31)
+            )),
             List.of()
         );
     }

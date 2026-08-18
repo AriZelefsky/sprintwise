@@ -1,5 +1,6 @@
 package com.sprintwise.gtfs.calendar;
 
+import com.sprintwise.gtfs.validation.GtfsFeedValidator;
 import com.sprintwise.model.FeedScopedId;
 import com.sprintwise.model.GtfsFeed;
 import com.sprintwise.model.ServiceCalendar;
@@ -21,11 +22,22 @@ public final class ServiceCalendarResolver {
     private final Map<LocalDate, Map<FeedScopedId, ServiceCalendarDate.ExceptionType>> exceptionsByDate;
 
     public ServiceCalendarResolver(GtfsFeed feed) {
+        this(feed, false);
+    }
+
+    /** Avoids a second full validation when an owning index has already validated the feed. */
+    public static ServiceCalendarResolver forValidatedFeed(GtfsFeed feed) {
+        return new ServiceCalendarResolver(feed, true);
+    }
+
+    private ServiceCalendarResolver(GtfsFeed feed, boolean alreadyValidated) {
         Objects.requireNonNull(feed, "feed");
+        if (!alreadyValidated) {
+            GtfsFeedValidator.validate(feed);
+        }
         this.feedId = feed.feedId();
         this.calendarsByServiceId = calendarsByServiceId(feed.serviceCalendars());
         this.exceptionsByDate = exceptionsByDate(feed.serviceCalendarDates());
-        validateNamespaces();
     }
 
     public String feedId() {
@@ -72,18 +84,7 @@ public final class ServiceCalendarResolver {
     ) {
         var result = new HashMap<FeedScopedId, ServiceCalendar>();
         for (ServiceCalendar calendar : calendars) {
-            Objects.requireNonNull(calendar, "service calendar");
-            if (calendar.startDate().isAfter(calendar.endDate())) {
-                throw new IllegalArgumentException(
-                    "Service calendar " + calendar.serviceId() + " starts after it ends"
-                );
-            }
-            ServiceCalendar previous = result.putIfAbsent(calendar.serviceId(), calendar);
-            if (previous != null) {
-                throw new IllegalArgumentException(
-                    "Duplicate service calendar for " + calendar.serviceId()
-                );
-            }
+            result.put(calendar.serviceId(), calendar);
         }
         return Map.copyOf(result);
     }
@@ -93,27 +94,13 @@ public final class ServiceCalendarResolver {
     ) {
         var mutable = new HashMap<LocalDate, Map<FeedScopedId, ServiceCalendarDate.ExceptionType>>();
         for (ServiceCalendarDate exception : exceptions) {
-            Objects.requireNonNull(exception, "service calendar date");
             var onDate = mutable.computeIfAbsent(exception.date(), ignored -> new HashMap<>());
-            var previous = onDate.putIfAbsent(exception.serviceId(), exception.exceptionType());
-            if (previous != null) {
-                throw new IllegalArgumentException(
-                    "Duplicate calendar-date exception for " + exception.serviceId()
-                        + " on " + exception.date()
-                );
-            }
+            onDate.put(exception.serviceId(), exception.exceptionType());
         }
 
         var immutable = new HashMap<LocalDate, Map<FeedScopedId, ServiceCalendarDate.ExceptionType>>();
         mutable.forEach((date, values) -> immutable.put(date, Map.copyOf(values)));
         return Map.copyOf(immutable);
-    }
-
-    private void validateNamespaces() {
-        calendarsByServiceId.keySet().forEach(this::requireFeedNamespace);
-        exceptionsByDate.values().forEach(exceptions ->
-            exceptions.keySet().forEach(this::requireFeedNamespace)
-        );
     }
 
     private void requireFeedNamespace(FeedScopedId serviceId) {

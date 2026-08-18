@@ -190,7 +190,13 @@ data/gtfs/mta/                         data/gtfs/lirr/
       |                                      |
       +----------- OneBusAwayGtfsLoader -----+
                           |
-              parse, map, namespace, validate
+                 parse with OneBusAway
+                          |
+                OneBusAwayGtfsMapper
+                 map and namespace IDs
+                          |
+                  GtfsFeedValidator
+               parser-neutral invariants
                           |
               +-----------+-----------+
               |                       |
@@ -284,8 +290,10 @@ web-application boundary.
 ### The boundary rule
 
 OneBusAway is an input parser, not SprintWise's domain model. Its classes are
-used only in `com.sprintwise.gtfs.onebusaway`. Before a feed leaves that
-adapter, each retained value is copied into a SprintWise record.
+used only in `com.sprintwise.gtfs.onebusaway`. `OneBusAwayGtfsLoader`
+orchestrates the reader, `OneBusAwayGtfsMapper` copies retained values into
+SprintWise records, and `OneBusAwayImportDiagnostics` translates parser and
+adapter failures. No parser-owned value leaves that package.
 
 That gives the rest of the application these properties:
 
@@ -401,12 +409,22 @@ The exception therefore wins over the weekly calendar.
 ### Validation before indexing
 
 The adapter fails fast. Invalid feed data does not become a usable `GtfsIndex`.
+After mapping, the parser-neutral `GtfsFeedValidator` is the single authority
+for SprintWise feed invariants. The loader converts its typed
+`GtfsFeedValidationException` into a source-aware `GtfsLoadException`.
+`GtfsIndex` invokes the same validator so a programmatically constructed feed
+cannot bypass the ingestion contract; it does not maintain a second set of
+relationship or timetable rules. `ServiceCalendarResolver` likewise delegates
+standalone feed validation to that authority.
 
-It checks:
+The OneBusAway boundary checks source/parser-specific concerns such as path
+existence, raw numeric pickup/drop-off values, agency timezone parsing, and
+parser read failures. The shared validator checks:
 
 - The source path exists.
 - The feed declares exactly one nonblank valid agency timezone.
 - Required IDs exist.
+- Every ID belongs to the containing feed namespace and entity IDs are unique.
 - Parent-station, route, service, trip, and stop references resolve.
 - Calendar exception types are supported.
 - Every trip has at least two stop times.
@@ -416,6 +434,7 @@ It checks:
 - A departure is not earlier than its arrival at the same stop.
 - Known times do not move backward as the trip proceeds.
 - Pickup and drop-off values are in the GTFS range `0..3`.
+- Calendar records have valid ranges and unique service/date identities.
 
 Missing both times at an intermediate stop is accepted and kept as two nulls.
 Stage 1 does not interpolate it. Times above 24 hours are accepted.
@@ -437,8 +456,11 @@ Current diagnostic codes are:
 - `read_failure`
 - `missing_required_id`
 - `missing_required_reference`
+- `invalid_feed_namespace`
+- `duplicate_entity_id`
 - `invalid_stop_time`
 - `invalid_pickup_drop_off_type`
+- `invalid_service_calendar`
 - `invalid_agency_timezone`
 - `ambiguous_agency_timezone`
 - `unsupported_calendar_exception`
@@ -1123,6 +1145,7 @@ application architecture.
 | `backend/src/main/java/com/sprintwise/debug/` | Read-only Stage 1 inspection plus the Stage 2 transit-routing debug endpoint, DTOs, and HTTP error translation |
 | `backend/src/main/java/com/sprintwise/gtfs/` | Parser-neutral loading interface, diagnostics, and load exception |
 | `backend/src/main/java/com/sprintwise/gtfs/onebusaway/` | The only production boundary allowed to depend on OneBusAway |
+| `backend/src/main/java/com/sprintwise/gtfs/validation/` | Parser-neutral feed invariants and typed validation failure context |
 | `backend/src/main/java/com/sprintwise/gtfs/calendar/` | Active-service calculation |
 | `backend/src/main/java/com/sprintwise/gtfs/time/` | GTFS service time/date/instant conversion |
 | `backend/src/main/java/com/sprintwise/model/` | Immutable SprintWise transit-domain records |
@@ -1137,6 +1160,7 @@ application architecture.
 | `backend/src/test/java/com/sprintwise/golden/` | Integrity checks for synthetic and normalized golden artifacts |
 | `backend/src/test/java/com/sprintwise/gtfs/` | GTFS test hierarchy |
 | `backend/src/test/java/com/sprintwise/gtfs/onebusaway/` | Loader, mapping, validation, and diagnostic tests |
+| `backend/src/test/java/com/sprintwise/gtfs/validation/` | Programmatic-feed validation and index-boundary tests |
 | `backend/src/test/java/com/sprintwise/gtfs/calendar/` | Weekly and exception-calendar tests |
 | `backend/src/test/java/com/sprintwise/gtfs/time/` | Midnight, maximum-span, timezone, and DST tests |
 | `backend/src/test/java/com/sprintwise/index/` | Timetable index unit tests and real-feed memory integration test |
@@ -1205,7 +1229,11 @@ application architecture.
 | File | What it does |
 |---|---|
 | `gtfs/GtfsLoader.java` | Parser-neutral `load(Path, feedId)` interface |
-| `gtfs/onebusaway/OneBusAwayGtfsLoader.java` | Reads the directory, maps every retained entity, namespaces IDs, validates relationships/timetables, and creates structured failures |
+| `gtfs/onebusaway/OneBusAwayGtfsLoader.java` | Small orchestration entry point: configure/read, map, validate, and return or translate failure |
+| `gtfs/onebusaway/OneBusAwayGtfsMapper.java` | Copies OneBusAway entities into sorted, feed-namespaced SprintWise records |
+| `gtfs/onebusaway/OneBusAwayImportDiagnostics.java` | Translates parser, mapping, and shared-validation failures into structured load diagnostics |
+| `gtfs/validation/GtfsFeedValidator.java` | Single parser-neutral authority for namespaces, references, calendars, and complete-trip timetable invariants |
+| `gtfs/validation/GtfsFeedValidationException.java` | Typed source-file/entity/field failure returned by shared validation before adapter translation |
 | `gtfs/GtfsImportDiagnostic.java` | Immutable machine-readable feed-error context and readable message formatter |
 | `gtfs/GtfsDiagnosticCode.java` | Stable feed-error categories used in tests and HTTP JSON |
 | `gtfs/GtfsDiagnosticSeverity.java` | `FATAL`/`WARNING` vocabulary; Stage 1 currently emits fatal failures only |
@@ -1285,6 +1313,7 @@ application architecture.
 |---|---|
 | `golden/GoldenFixtureIntegrityTest.java` | Synthetic network shape, after-midnight data, mock footpath math, and real golden case IDs remain intact |
 | `gtfs/onebusaway/OneBusAwayGtfsLoaderTest.java` | Production-path loading, relationships, namespacing, ordering, >24-hour values, pickup/drop-off values, five-stop trips, validation, and structured diagnostics |
+| `gtfs/validation/GtfsFeedValidatorTest.java` | Valid and invalid programmatic feeds use the same validation authority as adapter-loaded feeds and indexes |
 | `gtfs/calendar/ServiceCalendarResolverTest.java` | Weekday/weekend rules and exception additions/removals |
 | `gtfs/time/ServiceTimeResolverTest.java` | Agency timezone, `24:xx`, feed-derived `49:xx` window, spring/fall DST, and bounded date candidates |
 | `index/GtfsIndexTest.java` | Deterministic entity order, daytime/after-midnight/49-hour lookup, calendar filtering, tie-breaking, empty contracts, and immutability |
