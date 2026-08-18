@@ -9,7 +9,7 @@ import java.util.Optional;
  * The earliest known arrival at one compact stop.
  *
  * <p>Round zero has no incoming ride or predecessor. Every later label retains
- * both so Stage 2D can reconstruct a journey without changing the search
+ * both so Stage 2D1 can reconstruct a journey without changing the search
  * state introduced in Stage 2C.</p>
  */
 public final class RaptorLabel {

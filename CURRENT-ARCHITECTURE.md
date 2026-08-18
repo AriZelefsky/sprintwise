@@ -1,8 +1,8 @@
-# SprintWise current architecture (Stage 2C transit-only RAPTOR rounds)
+# SprintWise current architecture (Stage 2D1 transit journey reconstruction)
 
 (Reminder to hit command shift v to view in markdown view)
 
-This document explains the repository as it exists after Stage 2C. It is meant
+This document explains the repository as it exists after Stage 2D1. It is meant
 to let my incoming partner @ Zach Rosenberg gain a thorough and deep understanding of the project as it stands.
 
 Last checked against the working tree: 2026-08-18.
@@ -138,10 +138,11 @@ not from the Route record alone.
 
 ## The most important fact
 
-SprintWise can now find a time-only transit path between exact GTFS stops, but
-it does **not** yet reconstruct or serve a complete user-facing itinerary.
+SprintWise can now find a time-only transit path between exact GTFS stops and
+reconstruct it as ordered transit legs. It does **not** yet expose that routing
+result through HTTP or include walking.
 
-The completed Stage 1 and Stages 2A through 2C backend can:
+The completed Stage 1 and Stages 2A through 2D1 backend can:
 
 - Read independently configured MTA and LIRR static GTFS feeds.
 - Convert parser-owned objects into immutable SprintWise-owned records.
@@ -156,6 +157,9 @@ The completed Stage 1 and Stages 2A through 2C backend can:
 - Starting from one exact feed-scoped stop, run deterministic marked-stop
   rounds and find the earliest destination arrival using at most a positive
   number of boarded trips.
+- Follow the winning predecessor chain and expose one immutable transit leg per
+  boarded trip, in chronological order, while retaining the underlying search
+  result for diagnostics.
 - Change trips at the exact same stop with the temporary Stage 2C zero-slack
   policy; a departure equal to the prior arrival is catchable.
 - Resolve active services and departures, including `24:xx`, `49:xx`, and DST.
@@ -163,8 +167,8 @@ The completed Stage 1 and Stages 2A through 2C backend can:
 
 It cannot yet:
 
-- Reconstruct a complete journey as ordered ride legs, even though each label
-  already retains its incoming ride and predecessor.
+- Accept a RAPTOR routing query or return the reconstructed journey through an
+  HTTP endpoint.
 - Transfer between different platform/parent/nearby stops.
 - Connect an MTA stop to an LIRR stop or plan a journey across feeds.
 - Use `transfers.txt`, shapes, OSM, GraphHopper, or the OTP graph in its own
@@ -216,7 +220,15 @@ data/gtfs/mta/                         data/gtfs/lirr/
                 |
        RaptorSearchResult
        labels + predecessor chain
-       no itinerary backtrace/HTTP yet
+                |
+                v
+       RaptorJourneyReconstructor
+       validated chronological backtrace
+                |
+                v
+       RaptorJourney
+       immutable transit legs
+       no routing HTTP endpoint yet
 ```
 
 There is no database in this flow. The final state of successfully loaded data
@@ -600,7 +612,7 @@ no second state. Equal candidates within one round retain a deterministic
 predecessor using arrival, round, incoming departure, trip ID, and previous
 stop ID. Strict improvement plus the finite round cap makes cycles terminate.
 Each `RaptorLabel` retains its `RaptorRide` and preceding label so the next
-stage can backtrace, but Stage 2C exposes no `Journey` or ride-leg list.
+layer can backtrace without rerunning the search.
 
 The temporary reboarding rule is exact-stop and zero-slack. A later trip can be
 boarded only at the identical compact/feed-scoped stop produced by the prior
@@ -615,6 +627,35 @@ distinct `(pattern, boarding stop, arrival)` scan states, the round performs
 each scan remains Stage 2B's pattern-local `O(B*T*D*L)` implementation. Search
 stops immediately after an attempted round produces no strict improvements or
 after `maxRounds` transit rounds.
+
+### Stage 2D1 journey reconstruction
+
+`RaptorJourneyReconstructor` is a pure projection over one completed
+`RaptorSearchResult`. If the destination is unreachable it returns an empty
+`Optional`. Otherwise it starts at the winning destination label, follows one
+incoming ride and predecessor per round to round zero, reverses that list, and
+returns an immutable chronological `RaptorJourney`.
+
+Every predecessor ride becomes exactly one `RaptorTransitLeg`. The leg carries
+the exact trip, route, service, service date, boarding and alighting stop IDs
+and pattern positions, GTFS departure/arrival seconds, and resolved departure/
+arrival `Instant` values. Riding one train through five stops therefore remains
+one leg. Changing to another trip creates another leg even if both trips use
+the same `route_id`.
+
+There are no separate waiting or transfer objects in Stage 2D1. The wait at an
+exact-stop train change is the duration between the previous leg's arrival and
+the next leg's departure. Because Stage 2C added no physical transfer edge,
+consecutive legs must connect at the same exact feed-scoped stop.
+
+The reconstructor checks identity-based cycle repetition, consecutive round
+numbers, ride-to-label stop indexes, time consistency, and termination at the
+original round-zero label. `RaptorJourney` then validates chronological legs,
+origin/destination endpoints, the winning-round/leg-count relationship, and
+the special reachable origin-equals-destination zero-leg case. It retains the
+same immutable `RaptorSearchResult` so round, label, marked-stop, and scan-count
+diagnostics are not discarded. Reconstruction is `O(R)` time and space for
+`R` boarded trips; it performs no timetable or pattern scan.
 
 ## A concrete row from file to JSON
 
@@ -810,13 +851,19 @@ test consumes it beyond fixture-integrity checks.
 
 ### Search-result lifecycle
 
-There is still no `Journey`, `Leg`, `Itinerary`, `FootpathService`, or `/plan`
-production type. Stage 2C does create immutable `RaptorLabel`, `RaptorRound`,
-and `RaptorSearchResult` objects. A label produced by transit retains its
-incoming `RaptorRide` and predecessor label, so following those references
-would reach round 0. Actually backtracing and turning that chain into ordered
-ride legs is intentionally deferred to Stage 2D; the current result is a
-search-state result rather than a user-facing journey.
+Stage 2D1 adds `RaptorJourney`, `RaptorTransitLeg`, and
+`RaptorJourneyReconstructor`. The reconstructor consumes the immutable
+`RaptorSearchResult`, follows its winning labels to round zero, and produces an
+ordered transit-only journey. The journey deliberately retains that exact
+search result, so reconstruction does not throw away its rounds, alternate
+best-stop labels, or scan statistics.
+
+An unreachable search reconstructs to `Optional.empty()`. A reachable
+origin-equals-destination search reconstructs to a zero-leg journey whose
+arrival equals the requested departure. Otherwise, the number of transit legs
+equals the winning round. Waiting is visible as a timestamp gap between legs,
+not represented as a new edge. There is still no general `Itinerary`, walking
+leg, `FootpathService`, `/debug/raptor`, or `/plan` production type.
 
 ## Test-data lifecycles
 
@@ -878,8 +925,11 @@ same production adapter, catalog, compact network, scanner, and round router in
 a separate `-Xmx2G` JVM. It proves a one-round MTA ride from northbound 34
 St-Penn Station (`mta:A28N`) to 181 St (`mta:A06N`) and a one-round LIRR ride
 from Penn Station (`lirr:237`) to Woodmere (`lirr:217`) at an explicit time on
-2026-08-13. It prints completed rounds, marked labels, pattern-scan counts, and
-search time. It skips if either frozen feed directory is absent.
+2026-08-13. Stage 2D1 also reconstructs each result as one immutable real
+transit leg and verifies every ID, service date, GTFS offset, and `Instant`
+against its selected ride. It prints the legs, completed rounds, marked labels,
+pattern-scan counts, and search time. It skips if either frozen feed directory
+is absent.
 
 ### Golden data
 
@@ -920,7 +970,7 @@ application architecture.
 | `backend/src/main/java/com/sprintwise/gtfs/time/` | GTFS service time/date/instant conversion |
 | `backend/src/main/java/com/sprintwise/model/` | Immutable SprintWise transit-domain records |
 | `backend/src/main/java/com/sprintwise/index/` | Immutable lookup structures and resolved departure types |
-| `backend/src/main/java/com/sprintwise/raptor/` | Compact RAPTOR timetable, single-pattern scanner, and transit-only exact-stop round engine |
+| `backend/src/main/java/com/sprintwise/raptor/` | Compact RAPTOR timetable, exact-stop round engine, and immutable transit-journey reconstruction |
 | `backend/src/main/java/com/sprintwise/service/` | Application-lifetime catalog of independent feed/index snapshots or failures |
 | `backend/src/main/resources/` | Runtime Spring configuration |
 | `backend/src/test/` | Backend test code and test-only data |
@@ -974,7 +1024,7 @@ application architecture.
 
 | File | What it does |
 |---|---|
-| `backend/pom.xml` | Defines Java/Spring/OneBusAway plus isolated Stage 1, compact-RAPTOR, scanner, and round-search real-data profiles |
+| `backend/pom.xml` | Defines Java/Spring/OneBusAway plus isolated Stage 1, compact-RAPTOR, scanner, and round-search/journey real-data profiles |
 | `backend/src/main/resources/application.yml` | Sets port 8081 and independent MTA/LIRR paths and enabled flags |
 | `backend/src/main/java/com/sprintwise/SprintWiseApplication.java` | Spring Boot entry point and component-scan root |
 
@@ -1047,6 +1097,9 @@ application architecture.
 | `raptor/RaptorLabel.java` | Immutable stop arrival state with round, incoming ride, and predecessor retained for later backtrace |
 | `raptor/RaptorRound.java` | Immutable exactly-N-boardings improvement delta, marked-stop set, and pattern-scan count |
 | `raptor/RaptorSearchResult.java` | Immutable query metadata, attempted rounds, global best labels, reachability, and winning round |
+| `raptor/RaptorTransitLeg.java` | Immutable user-readable projection of one exact scheduled ride, including namespaced IDs, stops, GTFS offsets, and Instants |
+| `raptor/RaptorJourney.java` | Immutable reachable journey with chronological transit legs and the original search result retained for diagnostics |
+| `raptor/RaptorJourneyReconstructor.java` | Validates and reverses the winning predecessor chain into transit legs without rerunning the search |
 
 ### Debug HTTP layer
 
@@ -1077,8 +1130,8 @@ application architecture.
 | `raptor/CompositeRaptorNetworkIT.java` | Frozen MTA/LIRR composite pattern index fits under `-Xmx2G` and retains every Stage 1 trip |
 | `raptor/RaptorPatternScannerTest.java` | Catchability, calendars, extended times, access restrictions, missing times, repeated stops, ties, namespaces, and overtaking scans |
 | `raptor/RealPatternScannerIT.java` | Same production scanner resolves explicit real MTA and LIRR rides under `-Xmx2G` |
-| `raptor/RaptorRoundRouterTest.java` | One-/two-/three-trip rounds, exact transfers, dominance, service/access rules, 24:xx, marking, cycles, namespaces, and immutability |
-| `raptor/RealRaptorRoundSearchIT.java` | Same round engine finds fixed-date Penn-to-181 St MTA and Penn-to-Woodmere LIRR rides under `-Xmx2G` |
+| `raptor/RaptorRoundRouterTest.java` | One-/two-/three-trip rounds and journeys, same-route train changes, waits, exact transfers, service rules, 24:xx, chain validation, namespaces, and immutability |
+| `raptor/RealRaptorRoundSearchIT.java` | Same round engine and reconstructor produce fixed-date Penn-to-181 St MTA and Penn-to-Woodmere LIRR journeys under `-Xmx2G` |
 | `debug/DebugControllerTest.java` | All debug endpoints and their 400/404/503 JSON contracts using synthetic production loading |
 | `index/RealMtaIndexSizeIT.java` | Frozen MTA fits under `-Xmx2G` and reports entity, time, heap, and duplication measurements |
 | `index/RealLirrStage1CompatibilityIT.java` | Frozen LIRR loader/index compatibility, extended-time behavior, references, and memory measurements |
@@ -1174,7 +1227,11 @@ permanent architecture.
 - A new trip consumes another round and currently requires the exact same
   feed-scoped stop, with zero slack.
 - Equal stop arrivals do not create duplicate search states; ties are stable.
-- Labels retain predecessors, but current APIs do not claim to expose an itinerary.
+- Journey reconstruction creates exactly one immutable leg per predecessor
+  ride, preserves trip identity and feed namespaces, and retains the original
+  search result.
+- Unreachable searches have no journey; origin-equals-destination has a
+  reachable zero-leg journey.
 - Debug controllers inspect data but contain no routing algorithm.
 - The frozen source files are not mutated by normal startup or tests.
 
@@ -1183,8 +1240,8 @@ permanent architecture.
 - Human review of Stage 1 is still pending.
 - MTA and LIRR coexist, but there is no station-correspondence model or
   cross-feed transfer/routing logic.
-- Exact-stop transit rounds can find an arrival, but no itinerary backtrace or
-  complete journey-leg result exists yet.
+- Exact-stop transit rounds and backtrace can produce a transit journey, but no
+  HTTP routing endpoint exposes it yet.
 - Reboarding currently has zero transfer slack and cannot cross between parent,
   child, nearby, or corresponding station stops.
 - Pickup/drop-off semantics are enforced by the pattern scanner but remain
@@ -1199,6 +1256,6 @@ permanent architecture.
 - GraphHopper and all walking/sprinting logic are still absent.
 - The frontend is only a package placeholder.
 
-Stage 2C is implemented. The next Stage 2 work should backtrace the retained
-predecessor chain into ordered transit ride legs and test the resulting
-itinerary, without introducing walking or physical transfer edges yet.
+Stage 2D1 is implemented. The remaining Stage 2 work is the transit-only debug
+routing endpoint and final Stage 2 audit. Walking and physical transfer edges
+remain deferred.

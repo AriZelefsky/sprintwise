@@ -3,6 +3,7 @@ package com.sprintwise.raptor;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -23,6 +24,7 @@ import java.io.IOException;
 import java.net.URISyntaxException;
 import java.nio.file.Path;
 import java.time.DayOfWeek;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -33,6 +35,7 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import org.junit.jupiter.api.Test;
 
 class RaptorRoundRouterTest {
@@ -40,6 +43,192 @@ class RaptorRoundRouterTest {
     private static final ZoneId NEW_YORK = ZoneId.of("America/New_York");
     private static final LocalDate MONDAY = LocalDate.of(2026, 8, 17);
     private static final Path FIXTURE = fixtureDirectoryUnchecked();
+
+    @Test
+    void reconstructsOneTwoAndThreeTripJourneysInChronologicalOrder() {
+        RaptorNetwork network = network(Map.of("toy", roundSemanticsFeed("toy")));
+        var router = new RaptorRoundRouter(network);
+        var reconstructor = new RaptorJourneyReconstructor();
+        Instant query = localInstant(2026, 8, 17, 7, 59);
+
+        RaptorSearchResult directResult = router.route(
+            id("toy", "A"), id("toy", "E"), query, 3
+        );
+        RaptorJourney direct = reconstructor.reconstruct(directResult).orElseThrow();
+        assertSame(directResult, direct.searchResult());
+        assertEquals(id("toy", "A"), direct.origin());
+        assertEquals(id("toy", "E"), direct.destination());
+        assertEquals(query, direct.requestedDepartureInstant());
+        assertEquals(localInstant(2026, 8, 17, 9, 0), direct.arrivalInstant());
+        assertEquals(1, direct.numberOfBoardings());
+        RaptorTransitLeg directLeg = direct.legs().getFirst();
+        assertEquals(id("toy", "DIRECT_FIVE"), directLeg.tripId());
+        assertEquals(id("toy", "DIRECT"), directLeg.routeId());
+        assertEquals(id("toy", "ALL"), directLeg.serviceId());
+        assertEquals(MONDAY, directLeg.serviceDate());
+        assertEquals(id("toy", "A"), directLeg.boardingStopId());
+        assertEquals(id("toy", "E"), directLeg.alightingStopId());
+        assertEquals(0, directLeg.boardingStopPosition());
+        assertEquals(4, directLeg.alightingStopPosition());
+        assertEquals(28_800, directLeg.scheduledDepartureSeconds());
+        assertEquals(32_400, directLeg.scheduledArrivalSeconds());
+        assertEquals(localInstant(2026, 8, 17, 8, 0), directLeg.departureInstant());
+        assertEquals(localInstant(2026, 8, 17, 9, 0), directLeg.arrivalInstant());
+
+        RaptorJourney twoTrips = reconstructor.reconstruct(router.route(
+            id("toy", "A"), id("toy", "C"), query, 3
+        )).orElseThrow();
+        assertEquals(
+            List.of(id("toy", "LEG_1"), id("toy", "LEG_2")),
+            twoTrips.legs().stream().map(RaptorTransitLeg::tripId).toList()
+        );
+        assertEquals(
+            List.of(id("toy", "LOCAL"), id("toy", "LOCAL")),
+            twoTrips.legs().stream().map(RaptorTransitLeg::routeId).toList()
+        );
+        assertEquals(
+            twoTrips.legs().get(0).alightingStopId(),
+            twoTrips.legs().get(1).boardingStopId()
+        );
+
+        RaptorJourney threeTrips = reconstructor.reconstruct(router.route(
+            id("toy", "A"), id("toy", "D"), query, 3
+        )).orElseThrow();
+        assertEquals(
+            List.of(id("toy", "LEG_1"), id("toy", "LEG_2"), id("toy", "LEG_3")),
+            threeTrips.legs().stream().map(RaptorTransitLeg::tripId).toList()
+        );
+        assertEquals(3, threeTrips.numberOfBoardings());
+        for (int index = 1; index < threeTrips.legs().size(); index++) {
+            RaptorTransitLeg previous = threeTrips.legs().get(index - 1);
+            RaptorTransitLeg current = threeTrips.legs().get(index);
+            assertEquals(previous.alightingStopId(), current.boardingStopId());
+            assertFalse(current.departureInstant().isBefore(previous.arrivalInstant()));
+        }
+    }
+
+    @Test
+    void transferWaitingIsTheGapBetweenRideLegsWithoutAnInventedLeg() {
+        RaptorNetwork network = network(Map.of("toy", fasterTransferFeed("toy")));
+        RaptorJourney journey = new RaptorJourneyReconstructor().reconstruct(
+            new RaptorRoundRouter(network).route(
+                id("toy", "A"),
+                id("toy", "D"),
+                localInstant(2026, 8, 17, 7, 59),
+                2
+            )
+        ).orElseThrow();
+
+        assertEquals(2, journey.legs().size());
+        assertEquals(
+            Duration.ofSeconds(60),
+            Duration.between(
+                journey.legs().get(0).arrivalInstant(),
+                journey.legs().get(1).departureInstant()
+            )
+        );
+        assertEquals(
+            journey.legs().get(0).alightingStopId(),
+            journey.legs().get(1).boardingStopId()
+        );
+    }
+
+    @Test
+    void reconstructsPreviousServiceDateAndDefinesEmptyJourneyContracts() {
+        var reconstructor = new RaptorJourneyReconstructor();
+        RaptorNetwork fixture = fixtureNetwork("mta");
+        Instant afterMidnight = localInstant(2026, 8, 14, 0, 4);
+        RaptorJourney night = reconstructor.reconstruct(
+            new RaptorRoundRouter(fixture).route(
+                id("mta", "A"), id("mta", "C"), afterMidnight, 1
+            )
+        ).orElseThrow();
+
+        RaptorTransitLeg nightLeg = night.legs().getFirst();
+        assertEquals(id("mta", "NIGHT"), nightLeg.tripId());
+        assertEquals(LocalDate.of(2026, 8, 13), nightLeg.serviceDate());
+        assertEquals(86_700, nightLeg.scheduledDepartureSeconds());
+        assertEquals(87_300, nightLeg.scheduledArrivalSeconds());
+        assertEquals(localInstant(2026, 8, 14, 0, 5), nightLeg.departureInstant());
+        assertEquals(localInstant(2026, 8, 14, 0, 15), nightLeg.arrivalInstant());
+
+        RaptorNetwork edge = network(Map.of("edge", edgeFeed("edge")));
+        var router = new RaptorRoundRouter(edge);
+        Instant query = localInstant(2026, 8, 17, 7, 59);
+        RaptorSearchResult sameResult = router.route(
+            id("edge", "A"), id("edge", "A"), query, 3
+        );
+        RaptorJourney same = reconstructor.reconstruct(sameResult).orElseThrow();
+        assertTrue(same.legs().isEmpty());
+        assertEquals(0, same.numberOfBoardings());
+        assertEquals(query, same.arrivalInstant());
+        assertSame(sameResult, same.searchResult());
+
+        RaptorSearchResult unreachable = router.route(
+            id("edge", "ISOLATED"), id("edge", "T"), query, 3
+        );
+        assertTrue(reconstructor.reconstruct(unreachable).isEmpty());
+        assertThrows(UnsupportedOperationException.class, () -> night.legs().clear());
+    }
+
+    @Test
+    void reconstructedLegsPreserveFeedNamespaces() {
+        RaptorNetwork network = network(Map.of(
+            "mta", simpleFeed("mta"),
+            "lirr", simpleFeed("lirr")
+        ));
+        var router = new RaptorRoundRouter(network);
+        var reconstructor = new RaptorJourneyReconstructor();
+        Instant query = localInstant(2026, 8, 17, 7, 59);
+
+        for (String feedId : List.of("mta", "lirr")) {
+            RaptorJourney journey = reconstructor.reconstruct(router.route(
+                id(feedId, "A"), id(feedId, "B"), query, 1
+            )).orElseThrow();
+            RaptorTransitLeg leg = journey.legs().getFirst();
+            assertEquals(feedId, journey.origin().feedId());
+            assertEquals(feedId, journey.destination().feedId());
+            assertEquals(feedId, leg.tripId().feedId());
+            assertEquals(feedId, leg.routeId().feedId());
+            assertEquals(feedId, leg.serviceId().feedId());
+            assertEquals(feedId, leg.boardingStopId().feedId());
+            assertEquals(feedId, leg.alightingStopId().feedId());
+        }
+    }
+
+    @Test
+    void rejectsAMalformedPredecessorChainInsteadOfReturningABogusJourney() {
+        RaptorNetwork network = network(Map.of("edge", edgeFeed("edge")));
+        FeedScopedId origin = id("edge", "A");
+        FeedScopedId destination = id("edge", "T");
+        Instant query = localInstant(2026, 8, 17, 7, 59);
+        int destinationIndex = network.stopIndex(destination).orElseThrow();
+        RaptorLabel wrongRoundZero = RaptorLabel.origin(
+            destinationIndex,
+            destination,
+            query
+        );
+        var labelsByIndex = new TreeMap<Integer, RaptorLabel>();
+        labelsByIndex.put(destinationIndex, wrongRoundZero);
+        var labelsById = new TreeMap<FeedScopedId, RaptorLabel>();
+        labelsById.put(destination, wrongRoundZero);
+        var malformed = new RaptorSearchResult(
+            origin,
+            destination,
+            query,
+            3,
+            List.of(new RaptorRound(0, labelsByIndex, 0)),
+            labelsByIndex,
+            labelsById,
+            wrongRoundZero
+        );
+
+        IllegalStateException exception = assertThrows(
+            IllegalStateException.class,
+            () -> new RaptorJourneyReconstructor().reconstruct(malformed)
+        );
+        assertTrue(exception.getMessage().contains("wrong origin stop"));
+    }
 
     @Test
     void oneRideCanCrossFiveStopsWhileTwoAndThreeTripsNeedLaterRounds() {
@@ -293,9 +482,9 @@ class RaptorRoundRouterTest {
         List<TripSpec> trips = List.of(
             trip("DIRECT_FIVE", "DIRECT", "ALL", "A", 28_800, "P", 29_400,
                 "Q", 30_000, "R", 30_600, "E", 32_400),
-            trip("LEG_1", "LEG1", "ALL", "A", 28_800, "B", 29_400),
-            trip("LEG_2", "LEG2", "ALL", "B", 29_400, "C", 30_000),
-            trip("LEG_3", "LEG3", "ALL", "C", 30_000, "D", 30_600)
+            trip("LEG_1", "LOCAL", "ALL", "A", 28_800, "B", 29_400),
+            trip("LEG_2", "LOCAL", "ALL", "B", 29_400, "C", 30_000),
+            trip("LEG_3", "LOCAL", "ALL", "C", 30_000, "D", 30_600)
         );
         return feed(feedId, trips, List.of(allDays(feedId, "ALL")));
     }

@@ -2,6 +2,7 @@ package com.sprintwise.raptor;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sprintwise.config.GtfsProperties;
@@ -19,7 +20,7 @@ import java.util.List;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
-/** Optional fixed-date proof of Stage 2C against both frozen production feeds. */
+/** Optional fixed-date proof of Stage 2D1 against both frozen production feeds. */
 class RealRaptorRoundSearchIT {
 
     private static final long TWO_GIBIBYTES = 2L * 1024 * 1024 * 1024;
@@ -62,7 +63,11 @@ class RealRaptorRoundSearchIT {
             query,
             1
         );
-        double searchSeconds = (System.nanoTime() - startedNanos) / 1_000_000_000.0;
+        var reconstructor = new RaptorJourneyReconstructor();
+        RaptorJourney mtaJourney = reconstructor.reconstruct(mta).orElseThrow();
+        RaptorJourney lirrJourney = reconstructor.reconstruct(lirr).orElseThrow();
+        double searchAndReconstructionSeconds =
+            (System.nanoTime() - startedNanos) / 1_000_000_000.0;
 
         assertDirectResult("mta", mta);
         assertDirectResult("lirr", lirr);
@@ -86,13 +91,15 @@ class RealRaptorRoundSearchIT {
         assertEquals(Instant.parse("2026-08-13T22:17:00Z"), lirrRide.departureInstant());
         assertEquals(Instant.parse("2026-08-13T23:01:00Z"), lirrRide.arrivalInstant());
         assertFalse(mtaRide.tripId().equals(lirrRide.tripId()));
+        assertDirectJourney(mta, mtaJourney, mtaRide);
+        assertDirectJourney(lirr, lirrJourney, lirrRide);
 
         System.out.printf(
-            "%nStage 2C real round searches: PASS%n%s%n%s%n"
-                + "Combined search: %.3f s; JVM limit: %.1f MiB%n%n",
-            description("MTA", mta, network),
-            description("LIRR", lirr, network),
-            searchSeconds,
+            "%nStage 2D1 real journey reconstruction: PASS%n%s%n%s%n"
+                + "Combined search/reconstruction: %.3f s; JVM limit: %.1f MiB%n%n",
+            description("MTA", mta, mtaJourney),
+            description("LIRR", lirr, lirrJourney),
+            searchAndReconstructionSeconds,
             Runtime.getRuntime().maxMemory() / 1024.0 / 1024.0
         );
     }
@@ -112,26 +119,56 @@ class RealRaptorRoundSearchIT {
         assertFalse(ride.arrivalInstant().isBefore(ride.departureInstant()));
     }
 
+    private static void assertDirectJourney(
+        RaptorSearchResult result,
+        RaptorJourney journey,
+        RaptorRide ride
+    ) {
+        assertSame(result, journey.searchResult());
+        assertEquals(result.origin(), journey.origin());
+        assertEquals(result.destination(), journey.destination());
+        assertEquals(result.departureInstant(), journey.requestedDepartureInstant());
+        assertEquals(ride.arrivalInstant(), journey.arrivalInstant());
+        assertEquals(1, journey.numberOfBoardings());
+        RaptorTransitLeg leg = journey.legs().getFirst();
+        assertEquals(ride.tripId(), leg.tripId());
+        assertEquals(ride.routeId(), leg.routeId());
+        assertEquals(ride.serviceId(), leg.serviceId());
+        assertEquals(ride.serviceDate(), leg.serviceDate());
+        assertEquals(result.origin(), leg.boardingStopId());
+        assertEquals(result.destination(), leg.alightingStopId());
+        assertEquals(ride.boardingStopPosition(), leg.boardingStopPosition());
+        assertEquals(ride.alightingStopPosition(), leg.alightingStopPosition());
+        assertEquals(ride.departureSeconds(), leg.scheduledDepartureSeconds());
+        assertEquals(ride.arrivalSeconds(), leg.scheduledArrivalSeconds());
+        assertEquals(ride.departureInstant(), leg.departureInstant());
+        assertEquals(ride.arrivalInstant(), leg.arrivalInstant());
+    }
+
     private static String description(
         String label,
         RaptorSearchResult result,
-        RaptorNetwork network
+        RaptorJourney journey
     ) {
-        RaptorRide ride = result.bestDestinationLabel().orElseThrow().incomingRide().orElseThrow();
+        RaptorTransitLeg leg = journey.legs().getFirst();
         int markedStops = result.rounds().stream()
             .mapToInt(round -> round.markedStopIndexes().size())
             .sum();
         int scans = result.rounds().stream().mapToInt(RaptorRound::patternScanCount).sum();
-        return "%s: %s -> %s, trip=%s route=%s serviceDate=%s, depart=%s, arrive=%s, "
+        return "%s: %s -> %s, legs=%d, trip=%s route=%s service=%s serviceDate=%s, "
             .formatted(
                 label,
-                network.stop(ride.boardingStopIndex()).id(),
-                network.stop(ride.alightingStopIndex()).id(),
-                ride.tripId(),
-                ride.routeId(),
-                ride.serviceDate(),
-                ride.departureInstant(),
-                ride.arrivalInstant()
+                leg.boardingStopId(),
+                leg.alightingStopId(),
+                journey.legs().size(),
+                leg.tripId(),
+                leg.routeId(),
+                leg.serviceId(),
+                leg.serviceDate()
+            )
+            + "depart=%s, arrive=%s, ".formatted(
+                leg.departureInstant(),
+                leg.arrivalInstant()
             )
             + "rounds=%d, marked=%d, patternScans=%d".formatted(
                 result.completedTransitRounds(),

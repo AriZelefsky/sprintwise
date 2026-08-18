@@ -411,7 +411,8 @@ which represents earliest arrivals using at most the requested number of
 boardings. Dominance is time-only: only a strictly earlier stop arrival creates
 a new search state; equal arrivals use deterministic predecessor selection and
 are not expanded again. Labels retain the incoming ride and predecessor needed
-for Stage 2D, but no itinerary backtrace is exposed yet.
+for Stage 2D1; the implemented reconstructor now consumes that chain without
+changing the Stage 2C search state.
 
 Stage 2C's temporary transfer policy is deliberately narrow: a subsequent trip
 may be boarded only at the exact same compact `FeedScopedId` stop, with zero
@@ -420,13 +421,30 @@ catchable. Parent stations, nearby platforms, `transfers.txt`, walking,
 station correspondence, and cross-feed transfer edges remain absent. Search
 stops when no round improves a stop or when the positive round cap is reached.
 
+**Stage 2D1 implementation status:** Immutable transit journey reconstruction
+is implemented. `RaptorJourneyReconstructor` follows the winning destination
+label's predecessor chain back to round zero, rejects malformed or cyclic
+chains, and reverses the collected rides into chronological order. Each
+predecessor ride becomes exactly one `RaptorTransitLeg`; a train ridden through
+five stops remains one leg, while boarding another trip creates another leg
+even when both trips belong to the same route.
+
+Each leg retains its exact trip, route, service, service date, boarding and
+alighting stop IDs and positions, GTFS service-day seconds, and resolved
+`Instant` values. Waiting between rides is the time gap between consecutive
+leg timestamps; no walk or synthetic wait leg is invented. A reachable
+origin-equals-destination result becomes a zero-leg journey, an unreachable
+result remains explicitly empty, and a journey retains its original immutable
+`RaptorSearchResult` for round/label diagnostics. Stage 2 is not yet marked
+complete: the transit journey debug endpoint and final Stage 2 audit remain.
+
 **Build:**
 
 - Stage 2C exercises a small fixed-stop network with multiple useful patterns;
   the reusable round core is not restricted to one corridor
 - Classic RAPTOR is implemented: mark stops → scan patterns → extend labels → repeat
-- Stage 2D: journey backtrace → `(boardStop, tripId, alightStop, times)`
-- `POST /debug/raptor` with `{ fromStopId, toStopId, departAt }`
+- Stage 2D1: journey backtrace → `(boardStop, tripId, alightStop, times)`
+- Stage 2D2: `POST /debug/raptor` with `{ fromStopId, toStopId, departAt }`
 
 **Done when:**
 
