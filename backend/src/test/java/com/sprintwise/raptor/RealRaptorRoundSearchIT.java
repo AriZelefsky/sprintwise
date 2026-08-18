@@ -9,6 +9,8 @@ import com.sprintwise.config.GtfsProperties;
 import com.sprintwise.config.GtfsProperties.FeedProperties;
 import com.sprintwise.gtfs.onebusaway.OneBusAwayGtfsLoader;
 import com.sprintwise.model.FeedScopedId;
+import com.sprintwise.service.RaptorRoutingOutcome;
+import com.sprintwise.service.RaptorRoutingService;
 import com.sprintwise.service.TransitFeedCatalog;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -20,7 +22,7 @@ import java.util.List;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
-/** Optional fixed-date proof of Stage 2D1 against both frozen production feeds. */
+/** Optional fixed-date proof of the Stage 2D2 application service over both frozen feeds. */
 class RealRaptorRoundSearchIT {
 
     private static final long TWO_GIBIBYTES = 2L * 1024 * 1024 * 1024;
@@ -47,25 +49,26 @@ class RealRaptorRoundSearchIT {
             properties
         );
         RaptorNetwork network = new RaptorNetworkBuilder().build(catalog);
-        var router = new RaptorRoundRouter(network);
+        var routingService = new RaptorRoutingService(catalog, network);
         Instant query = ZonedDateTime.of(2026, 8, 13, 17, 0, 0, 0, NEW_YORK).toInstant();
 
         long startedNanos = System.nanoTime();
-        RaptorSearchResult mta = router.route(
+        RaptorRoutingOutcome mtaOutcome = routingService.route(
             id("mta", "A28N"),
             id("mta", "A06N"),
             query,
             1
         );
-        RaptorSearchResult lirr = router.route(
+        RaptorRoutingOutcome lirrOutcome = routingService.route(
             id("lirr", "237"),
             id("lirr", "217"),
             query,
             1
         );
-        var reconstructor = new RaptorJourneyReconstructor();
-        RaptorJourney mtaJourney = reconstructor.reconstruct(mta).orElseThrow();
-        RaptorJourney lirrJourney = reconstructor.reconstruct(lirr).orElseThrow();
+        RaptorSearchResult mta = mtaOutcome.searchResult();
+        RaptorSearchResult lirr = lirrOutcome.searchResult();
+        RaptorJourney mtaJourney = mtaOutcome.journey().orElseThrow();
+        RaptorJourney lirrJourney = lirrOutcome.journey().orElseThrow();
         double searchAndReconstructionSeconds =
             (System.nanoTime() - startedNanos) / 1_000_000_000.0;
 
@@ -95,7 +98,7 @@ class RealRaptorRoundSearchIT {
         assertDirectJourney(lirr, lirrJourney, lirrRide);
 
         System.out.printf(
-            "%nStage 2D1 real journey reconstruction: PASS%n%s%n%s%n"
+            "%nStage 2D2 real application-service routing: PASS%n%s%n%s%n"
                 + "Combined search/reconstruction: %.3f s; JVM limit: %.1f MiB%n%n",
             description("MTA", mta, mtaJourney),
             description("LIRR", lirr, lirrJourney),

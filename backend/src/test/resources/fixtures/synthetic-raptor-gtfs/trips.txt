@@ -1,0 +1,6 @@
+route_id,service_id,trip_id,trip_headsign,direction_id
+DIRECT,ALL,DIRECT_FIVE,Echo,0
+LOCAL,ALL,LEG_1,Beta,0
+LOCAL,ALL,LEG_2,Charlie,0
+LOCAL,ALL,LEG_3,Delta,0
+DIRECT,ALL,NIGHT,Charlie,0

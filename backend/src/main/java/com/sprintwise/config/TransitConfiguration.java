@@ -4,6 +4,7 @@ import com.sprintwise.gtfs.GtfsLoader;
 import com.sprintwise.gtfs.onebusaway.OneBusAwayGtfsLoader;
 import com.sprintwise.raptor.RaptorNetwork;
 import com.sprintwise.raptor.RaptorNetworkBuilder;
+import com.sprintwise.service.RaptorRoutingService;
 import com.sprintwise.service.TransitFeedCatalog;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -26,5 +27,13 @@ public class TransitConfiguration {
     @Bean
     RaptorNetwork raptorNetwork(TransitFeedCatalog catalog) {
         return new RaptorNetworkBuilder().build(catalog);
+    }
+
+    @Bean
+    RaptorRoutingService raptorRoutingService(
+        TransitFeedCatalog catalog,
+        RaptorNetwork network
+    ) {
+        return new RaptorRoutingService(catalog, network);
     }
 }

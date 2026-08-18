@@ -1,8 +1,10 @@
 package com.sprintwise.debug;
 
 import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -10,6 +12,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.sprintwise.config.GtfsProperties;
 import com.sprintwise.config.GtfsProperties.FeedProperties;
 import com.sprintwise.gtfs.onebusaway.OneBusAwayGtfsLoader;
+import com.sprintwise.raptor.RaptorNetwork;
+import com.sprintwise.raptor.RaptorNetworkBuilder;
+import com.sprintwise.service.RaptorRoutingService;
 import com.sprintwise.service.TransitFeedCatalog;
 import java.io.IOException;
 import java.net.URISyntaxException;
@@ -116,6 +121,171 @@ class DebugControllerTest {
     }
 
     @Test
+    void routesAndSerializesDirectAndPreviousServiceDateJourneys() throws Exception {
+        mockMvc.perform(post("/debug/raptor")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "fromStopId": "mta:A",
+                      "toStopId": "mta:C",
+                      "departAt": "2026-08-13T07:59:00-04:00"
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+            .andExpect(jsonPath("$.fromStopId").value("mta:A"))
+            .andExpect(jsonPath("$.toStopId").value("mta:C"))
+            .andExpect(jsonPath("$.departAt").value("2026-08-13T11:59:00Z"))
+            .andExpect(jsonPath("$.reachable").value(true))
+            .andExpect(jsonPath("$.arrivalAt").value("2026-08-13T12:25:00Z"))
+            .andExpect(jsonPath("$.winningRound").value(1))
+            .andExpect(jsonPath("$.numberOfBoardedTrips").value(1))
+            .andExpect(jsonPath("$.roundsAttempted").value(2))
+            .andExpect(jsonPath("$.legs", hasSize(1)))
+            .andExpect(jsonPath("$.legs[0].tripId").value("mta:DIRECT_SLOW"))
+            .andExpect(jsonPath("$.legs[0].routeId").value("mta:DIRECT"))
+            .andExpect(jsonPath("$.legs[0].serviceId").value("mta:DIRECT_CASE"))
+            .andExpect(jsonPath("$.legs[0].serviceDate").value("2026-08-13"))
+            .andExpect(jsonPath("$.legs[0].boardingStopId").value("mta:A"))
+            .andExpect(jsonPath("$.legs[0].alightingStopId").value("mta:C"))
+            .andExpect(jsonPath("$.legs[0].boardingStopPosition").value(0))
+            .andExpect(jsonPath("$.legs[0].alightingStopPosition").value(1))
+            .andExpect(jsonPath("$.legs[0].departureSeconds").value(28_920))
+            .andExpect(jsonPath("$.legs[0].arrivalSeconds").value(30_300))
+            .andExpect(jsonPath("$.legs[0].departureTime").value("2026-08-13T12:02:00Z"))
+            .andExpect(jsonPath("$.legs[0].arrivalTime").value("2026-08-13T12:25:00Z"))
+            .andExpect(jsonPath("$.rounds").doesNotExist())
+            .andExpect(jsonPath("$.bestLabelsByStopIndex").doesNotExist())
+            .andExpect(jsonPath("$.searchResult").doesNotExist());
+
+        mockMvc.perform(post("/debug/raptor")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "fromStopId": "mta:A",
+                      "toStopId": "mta:C",
+                      "departAt": "2026-08-14T00:04:00-04:00",
+                      "maxRounds": 1
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.legs[0].tripId").value("mta:NIGHT"))
+            .andExpect(jsonPath("$.legs[0].serviceDate").value("2026-08-13"))
+            .andExpect(jsonPath("$.legs[0].departureSeconds").value(86_700))
+            .andExpect(jsonPath("$.legs[0].arrivalSeconds").value(87_300))
+            .andExpect(jsonPath("$.legs[0].departureTime").value("2026-08-14T04:05:00Z"))
+            .andExpect(jsonPath("$.legs[0].arrivalTime").value("2026-08-14T04:15:00Z"));
+    }
+
+    @Test
+    void definesZeroLegUnreachableAndDeterministicRoutingResponses() throws Exception {
+        String sameStopRequest = """
+            {
+              "fromStopId": "mta:A",
+              "toStopId": "mta:A",
+              "departAt": "2026-08-13T07:59:00-04:00",
+              "maxRounds": 4
+            }
+            """;
+        String first = mockMvc.perform(post("/debug/raptor")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(sameStopRequest))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.reachable").value(true))
+            .andExpect(jsonPath("$.arrivalAt").value("2026-08-13T11:59:00Z"))
+            .andExpect(jsonPath("$.winningRound").value(0))
+            .andExpect(jsonPath("$.numberOfBoardedTrips").value(0))
+            .andExpect(jsonPath("$.roundsAttempted").value(0))
+            .andExpect(jsonPath("$.legs", empty()))
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+        String second = mockMvc.perform(post("/debug/raptor")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(sameStopRequest))
+            .andExpect(status().isOk())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+        org.junit.jupiter.api.Assertions.assertEquals(first, second);
+
+        mockMvc.perform(post("/debug/raptor")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "fromStopId": "mta:A",
+                      "toStopId": "lirr:C",
+                      "departAt": "2026-08-13T07:59:00-04:00",
+                      "maxRounds": 4
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.reachable").value(false))
+            .andExpect(jsonPath("$.arrivalAt").doesNotExist())
+            .andExpect(jsonPath("$.winningRound").doesNotExist())
+            .andExpect(jsonPath("$.numberOfBoardedTrips").value(0))
+            .andExpect(jsonPath("$.legs", empty()));
+    }
+
+    @Test
+    void validatesRaptorRequestFieldsAndStops() throws Exception {
+        mockMvc.perform(post("/debug/raptor")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "fromStopId": "mta:UNKNOWN",
+                      "toStopId": "mta:C",
+                      "departAt": "2026-08-13T07:59:00-04:00"
+                    }
+                    """))
+            .andExpect(status().isNotFound())
+            .andExpect(jsonPath("$.code").value("not_found"))
+            .andExpect(jsonPath("$.stopId").value("mta:UNKNOWN"))
+            .andExpect(jsonPath("$.role").value("origin"));
+        mockMvc.perform(post("/debug/raptor")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "fromStopId": "mta:A",
+                      "toStopId": "mta:UNKNOWN",
+                      "departAt": "2026-08-13T07:59:00-04:00"
+                    }
+                    """))
+            .andExpect(status().isNotFound())
+            .andExpect(jsonPath("$.code").value("not_found"))
+            .andExpect(jsonPath("$.stopId").value("mta:UNKNOWN"))
+            .andExpect(jsonPath("$.role").value("destination"));
+        assertRaptorProblem(
+            "{\"fromStopId\":\"A\",\"toStopId\":\"mta:C\","
+                + "\"departAt\":\"2026-08-13T07:59:00-04:00\"}",
+            400,
+            "malformed_id"
+        );
+        assertRaptorProblem(
+            "{\"fromStopId\":\"mta:A\",\"toStopId\":\"mta:C\","
+                + "\"departAt\":\"2026-08-13T07:59:00\"}",
+            400,
+            "malformed_timestamp"
+        );
+        assertRaptorProblem(
+            "{\"toStopId\":\"mta:C\","
+                + "\"departAt\":\"2026-08-13T07:59:00-04:00\"}",
+            400,
+            "missing_field"
+        );
+        for (int invalidMaxRounds : List.of(0, 9)) {
+            assertRaptorProblem(
+                "{\"fromStopId\":\"mta:A\",\"toStopId\":\"mta:C\","
+                    + "\"departAt\":\"2026-08-13T07:59:00-04:00\","
+                    + "\"maxRounds\":" + invalidMaxRounds + "}",
+                400,
+                "invalid_max_rounds"
+            );
+        }
+        assertRaptorProblem("{not-json}", 400, "malformed_json");
+    }
+
+    @Test
     void returnsClearErrorsForUnknownAndMalformedRequests() throws Exception {
         mockMvc.perform(get("/debug/stop/{id}", "mta:UNKNOWN"))
             .andExpect(status().isNotFound())
@@ -186,8 +356,11 @@ class DebugControllerTest {
             new FeedProperties("disabled", null, false)
         ));
         var catalog = new TransitFeedCatalog(new OneBusAwayGtfsLoader(), properties);
+        RaptorNetwork network = new RaptorNetworkBuilder().build(catalog);
         MockMvc unavailableMvc = MockMvcBuilders
-            .standaloneSetup(new DebugController(catalog))
+            .standaloneSetup(
+                new DebugController(catalog, new RaptorRoutingService(catalog, network))
+            )
             .setControllerAdvice(new DebugApiExceptionHandler())
             .build();
 
@@ -214,6 +387,30 @@ class DebugControllerTest {
         unavailableMvc.perform(get("/debug/stop/{id}", "disabled:A"))
             .andExpect(status().isNotFound())
             .andExpect(jsonPath("$.code").value("not_found"));
+
+        unavailableMvc.perform(post("/debug/raptor")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "fromStopId": "available:A",
+                      "toStopId": "missing:C",
+                      "departAt": "2026-08-13T07:59:00-04:00"
+                    }
+                    """))
+            .andExpect(status().isServiceUnavailable())
+            .andExpect(jsonPath("$.code").value("feed_unavailable"))
+            .andExpect(jsonPath("$.feedId").value("missing"))
+            .andExpect(jsonPath("$.diagnosticCode").value("source_missing"));
+    }
+
+    private void assertRaptorProblem(String requestJson, int expectedStatus, String code)
+        throws Exception {
+        mockMvc.perform(post("/debug/raptor")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(requestJson))
+            .andExpect(status().is(expectedStatus))
+            .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+            .andExpect(jsonPath("$.code").value(code));
     }
 
     private static Path fixtureDirectoryUnchecked() {

@@ -4,6 +4,7 @@ import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.hasSize;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -15,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.MediaType;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -78,5 +80,31 @@ class RealMtaDebugApiIT {
                 .param("date", "2026-08-13"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.activeServiceIds", hasItem("mta:Weekday")));
+
+        mockMvc.perform(post("/debug/raptor")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "fromStopId": "mta:A28N",
+                      "toStopId": "mta:A06N",
+                      "departAt": "2026-08-13T17:00:00-04:00",
+                      "maxRounds": 1
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.reachable").value(true))
+            .andExpect(jsonPath("$.winningRound").value(1))
+            .andExpect(jsonPath("$.numberOfBoardedTrips").value(1))
+            .andExpect(jsonPath("$.legs", hasSize(1)))
+            .andExpect(jsonPath("$.legs[0].tripId")
+                .value("mta:BSP26GEN-A087-Weekday-00_097700_A..N54R"))
+            .andExpect(jsonPath("$.legs[0].routeId").value("mta:A"))
+            .andExpect(jsonPath("$.legs[0].serviceDate").value("2026-08-13"))
+            .andExpect(jsonPath("$.legs[0].boardingStopId").value("mta:A28N"))
+            .andExpect(jsonPath("$.legs[0].alightingStopId").value("mta:A06N"))
+            .andExpect(jsonPath("$.legs[0].departureTime")
+                .value("2026-08-13T21:02:30Z"))
+            .andExpect(jsonPath("$.legs[0].arrivalTime")
+                .value("2026-08-13T21:25:30Z"));
     }
 }

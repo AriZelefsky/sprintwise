@@ -4,8 +4,10 @@ import com.sprintwise.gtfs.GtfsImportDiagnostic;
 import com.sprintwise.gtfs.GtfsLoadException;
 import com.sprintwise.service.FeedUnavailableException;
 import com.sprintwise.service.UnknownFeedException;
+import com.sprintwise.service.UnknownTransitStopException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -22,6 +24,19 @@ public final class DebugApiExceptionHandler {
     @ExceptionHandler(DebugNotFoundException.class)
     ProblemDetail notFound(DebugNotFoundException exception) {
         return problem(HttpStatus.NOT_FOUND, "Debug resource not found", exception.getMessage(), "not_found");
+    }
+
+    @ExceptionHandler(UnknownTransitStopException.class)
+    ProblemDetail unknownTransitStop(UnknownTransitStopException exception) {
+        ProblemDetail problem = problem(
+            HttpStatus.NOT_FOUND,
+            "Debug resource not found",
+            exception.getMessage(),
+            "not_found"
+        );
+        problem.setProperty("stopId", exception.stopId().toString());
+        problem.setProperty("role", exception.role());
+        return problem;
     }
 
     @ExceptionHandler(UnknownFeedException.class)
@@ -53,6 +68,16 @@ public final class DebugApiExceptionHandler {
             "Invalid request parameter",
             "Parameter " + exception.getName() + " has an invalid value: " + exception.getValue(),
             "invalid_parameter"
+        );
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    ProblemDetail malformedJson(HttpMessageNotReadableException exception) {
+        return problem(
+            HttpStatus.BAD_REQUEST,
+            "Invalid debug request",
+            "Request body must contain valid JSON with the expected field types",
+            "malformed_json"
         );
     }
 

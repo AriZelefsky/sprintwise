@@ -4,6 +4,7 @@ import com.sprintwise.index.GtfsIndex;
 import com.sprintwise.model.FeedScopedId;
 import com.sprintwise.model.Stop;
 import com.sprintwise.model.Trip;
+import com.sprintwise.service.RaptorRoutingService;
 import com.sprintwise.service.TransitFeedCatalog;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -12,6 +13,8 @@ import java.time.format.DateTimeParseException;
 import java.util.List;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -22,11 +25,18 @@ public final class DebugController {
 
     private static final int DEFAULT_LIMIT = 20;
     private static final int MAX_LIMIT = 100;
+    private static final int DEFAULT_RAPTOR_ROUNDS = 4;
+    private static final int MAX_RAPTOR_ROUNDS = 8;
 
     private final TransitFeedCatalog feeds;
+    private final RaptorRoutingService routingService;
 
-    public DebugController(TransitFeedCatalog feeds) {
+    public DebugController(
+        TransitFeedCatalog feeds,
+        RaptorRoutingService routingService
+    ) {
         this.feeds = feeds;
+        this.routingService = routingService;
     }
 
     @GetMapping("/stop/{id}")
@@ -85,6 +95,37 @@ public final class DebugController {
         );
     }
 
+    @PostMapping("/raptor")
+    public RaptorRouteDebugResponse raptor(
+        @RequestBody RaptorRouteDebugRequest request
+    ) {
+        if (request == null) {
+            throw new DebugBadRequestException(
+                "missing_request_body",
+                "A RAPTOR request body is required"
+            );
+        }
+        FeedScopedId origin = parseId(requiredField(request.fromStopId(), "fromStopId"));
+        FeedScopedId destination = parseId(requiredField(request.toStopId(), "toStopId"));
+        Instant departure = parseTimestamp(
+            requiredField(request.departAt(), "departAt"),
+            "departAt"
+        );
+        int maxRounds = request.maxRounds() == null
+            ? DEFAULT_RAPTOR_ROUNDS
+            : request.maxRounds();
+        if (maxRounds < 1 || maxRounds > MAX_RAPTOR_ROUNDS) {
+            throw new DebugBadRequestException(
+                "invalid_max_rounds",
+                "maxRounds must be between 1 and " + MAX_RAPTOR_ROUNDS
+                    + "; received " + maxRounds
+            );
+        }
+        return RaptorRouteDebugResponse.from(
+            routingService.route(origin, destination, departure, maxRounds)
+        );
+    }
+
     private GtfsIndex index(String feedId) {
         return feeds.index(feedId);
     }
@@ -115,15 +156,29 @@ public final class DebugController {
     }
 
     private static Instant parseTimestamp(String value) {
+        return parseTimestamp(value, "at");
+    }
+
+    private static Instant parseTimestamp(String value, String field) {
         try {
             return OffsetDateTime.parse(value).toInstant();
         } catch (DateTimeParseException exception) {
             throw new DebugBadRequestException(
                 "malformed_timestamp",
-                "at must be an ISO-8601 timestamp with an explicit offset, for example "
+                field + " must be an ISO-8601 timestamp with an explicit offset, for example "
                     + "2026-08-13T08:00:00-04:00; received " + value
             );
         }
+    }
+
+    private static String requiredField(String value, String field) {
+        if (value == null || value.isBlank()) {
+            throw new DebugBadRequestException(
+                "missing_field",
+                "Required JSON field is missing or blank: " + field
+            );
+        }
+        return value;
     }
 
     private static LocalDate parseDate(String value) {

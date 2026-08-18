@@ -344,6 +344,13 @@ deferred.
 
 **Goal:** Correct round-based transit search on a tiny stop set.
 
+**Implementation status:** Stage/Phase 2 is implementation-complete, pending
+human review. Stages 2A through 2D2 now provide one immutable composite RAPTOR
+timetable, service-aware legal ride scanning, marked-stop earliest-arrival
+rounds, immutable journey reconstruction, and a thin debug HTTP boundary. The
+implemented scope remains exact-stop and transit-only; walking and physical
+transfer edges begin in Phase 3.
+
 **Stage 2A implementation status:** The immutable timetable foundation is
 implemented. One composite `RaptorNetwork` is derived from every available
 Stage 1 catalog entry; it uses one global compact index space while preserving
@@ -435,8 +442,31 @@ alighting stop IDs and positions, GTFS service-day seconds, and resolved
 leg timestamps; no walk or synthetic wait leg is invented. A reachable
 origin-equals-destination result becomes a zero-leg journey, an unreachable
 result remains explicitly empty, and a journey retains its original immutable
-`RaptorSearchResult` for round/label diagnostics. Stage 2 is not yet marked
-complete: the transit journey debug endpoint and final Stage 2 audit remain.
+`RaptorSearchResult` for round/label diagnostics.
+
+**Stage 2D2 implementation status:** `POST /debug/raptor` exposes the completed
+search and reconstruction path through `RaptorRoutingService`. The service
+reuses the application-lifetime singleton `RaptorNetwork`; the controller only
+parses and validates the explicit namespaced stops, offset-bearing timestamp,
+and optional `maxRounds`, then maps the application result to stable JSON. It
+does not rebuild the network or contain timetable scanning, round, or
+reconstruction logic.
+
+`maxRounds` defaults to 4 and must be between 1 and 8. A valid unreachable
+query returns HTTP 200 with `reachable=false` and no legs. Unknown stops return
+404, malformed input returns 400, and a configured but unavailable feed keeps
+the existing structured 503 diagnostic. The response includes the origin,
+destination, requested departure `Instant`, reachability, optional arrival and
+winning round, boarded-trip count, attempted-round count, and one ordered leg
+per boarded trip. Internal label maps, predecessor chains, and round objects
+are deliberately not serialized.
+
+The Stage 2 audit confirms that feed namespaces, full trip identity, extended
+GTFS times, explicit feed timezones, immutability, and deterministic ordering
+remain intact from Stage 1 through the HTTP result. It also confirms that Stage
+2 added no walking, station correspondence, physical or cross-feed transfer
+edges, GraphHopper, sprint state, Pareto bags, OTP routing, frontend behavior,
+or Phase 3 work.
 
 **Build:**
 
@@ -444,12 +474,17 @@ complete: the transit journey debug endpoint and final Stage 2 audit remain.
   the reusable round core is not restricted to one corridor
 - Classic RAPTOR is implemented: mark stops → scan patterns → extend labels → repeat
 - Stage 2D1: journey backtrace → `(boardStop, tripId, alightStop, times)`
-- Stage 2D2: `POST /debug/raptor` with `{ fromStopId, toStopId, departAt }`
+- Stage 2D2: `POST /debug/raptor` with explicit namespaced stops, offset
+  timestamp, and optional bounded `maxRounds`
 
 **Done when:**
 
-- Ride sequence matches OTP on the toy corridor (ignoring walks)
-- Round loop structure mirrors pyraptor’s pattern (read pyraptor while implementing)
+- Synthetic one-, two-, and three-trip searches return one ordered leg per
+  boarded trip, including previous-service-date extended times
+- Frozen MTA and LIRR fixed-date queries produce the expected real trips and
+  times under the optional 2 GiB integration profile
+- The endpoint preserves explicit unreachable, zero-leg, validation, and feed-
+  failure contracts without exposing internal search state
 
 **Defer:** walks, GraphHopper, Pareto bags, sprint
 

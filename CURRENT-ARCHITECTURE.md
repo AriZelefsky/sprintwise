@@ -1,8 +1,8 @@
-# SprintWise current architecture (Stage 2D1 transit journey reconstruction)
+# SprintWise current architecture (Stage 2 complete: transit-only exact-stop routing)
 
 (Reminder to hit command shift v to view in markdown view)
 
-This document explains the repository as it exists after Stage 2D1. It is meant
+This document explains the repository as it exists after Stage 2D2. It is meant
 to let my incoming partner @ Zach Rosenberg gain a thorough and deep understanding of the project as it stands.
 
 Last checked against the working tree: 2026-08-18.
@@ -139,10 +139,10 @@ not from the Route record alone.
 ## The most important fact
 
 SprintWise can now find a time-only transit path between exact GTFS stops and
-reconstruct it as ordered transit legs. It does **not** yet expose that routing
-result through HTTP or include walking.
+reconstruct it as ordered transit legs. `POST /debug/raptor` exposes that path
+for inspection. It still does **not** include walking or physical transfers.
 
-The completed Stage 1 and Stages 2A through 2D1 backend can:
+The completed Stage 1 and Stages 2A through 2D2 backend can:
 
 - Read independently configured MTA and LIRR static GTFS feeds.
 - Convert parser-owned objects into immutable SprintWise-owned records.
@@ -160,6 +160,8 @@ The completed Stage 1 and Stages 2A through 2D1 backend can:
 - Follow the winning predecessor chain and expose one immutable transit leg per
   boarded trip, in chronological order, while retaining the underlying search
   result for diagnostics.
+- Accept namespaced exact-stop routing requests at `POST /debug/raptor` with an
+  explicit offset timestamp and return a stable, user-readable JSON journey.
 - Change trips at the exact same stop with the temporary Stage 2C zero-slack
   policy; a departure equal to the prior arrival is catchable.
 - Resolve active services and departures, including `24:xx`, `49:xx`, and DST.
@@ -167,8 +169,6 @@ The completed Stage 1 and Stages 2A through 2D1 backend can:
 
 It cannot yet:
 
-- Accept a RAPTOR routing query or return the reconstructed journey through an
-  HTTP endpoint.
 - Transfer between different platform/parent/nearby stops.
 - Connect an MTA stop to an LIRR stop or plan a journey across feeds.
 - Use `transfers.txt`, shapes, OSM, GraphHopper, or the OTP graph in its own
@@ -204,15 +204,17 @@ data/gtfs/mta/                         data/gtfs/lirr/
        each owns its feed/index or load failure
                  /                    \
                 v                      v
-       Composite RaptorNetwork    DebugController
-       compact stops, trips,      namespace selects
-       patterns, feed contexts    one Stage 1 index
-                |                      |
-                v                      |
-       RaptorPatternScanner              |
-       one pattern + board stop           |
-                |                      |
-       immutable RaptorRide(s)    JSON / Problem Details
+       Composite RaptorNetwork    Stage 1 debug lookups
+       compact stops, trips,      namespace selects one index
+       patterns, feed contexts            |
+                |                  JSON / Problem Details
+                v
+       RaptorRoutingService <----- POST /debug/raptor
+                |
+       RaptorPatternScanner
+       one pattern + board stop
+                |
+       immutable RaptorRide(s)
                 |
                 v
        RaptorRoundRouter
@@ -228,7 +230,8 @@ data/gtfs/mta/                         data/gtfs/lirr/
                 v
        RaptorJourney
        immutable transit legs
-       no routing HTTP endpoint yet
+                |
+       stable JSON / Problem Details
 ```
 
 There is no database in this flow. The final state of successfully loaded data
@@ -263,11 +266,14 @@ A restart parses and indexes the static files again.
    feed/index contexts and derives compact global stop/trip IDs, patterns, and
    stop-to-pattern arrays. Failed entries are listed as unavailable and remain
    owned by the catalog with their original diagnostic.
-10. A structured `GtfsLoadException` affects only that feed. Its entry retains
+10. Spring constructs one `RaptorRoutingService` around that same singleton
+    network, plus one router and journey reconstructor. Requests reuse all of
+    them; no request rebuilds the network or reparses a feed.
+11. A structured `GtfsLoadException` affects only that feed. Its entry retains
    one `FeedUnavailableException`, so requests for it return HTTP 503 while
    other entries remain usable. Unexpected programming/configuration failures
    still abort startup instead of being mislabeled as bad feed data.
-11. Disabled feeds do not enter the catalog and have the same 404 contract as
+12. Disabled feeds do not enter the catalog and have the same 404 contract as
     unknown feed namespaces.
 
 This is eager startup loading, but it is deliberately failure-tolerant at the
@@ -657,6 +663,144 @@ same immutable `RaptorSearchResult` so round, label, marked-stop, and scan-count
 diagnostics are not discarded. Reconstruction is `O(R)` time and space for
 `R` boarded trips; it performs no timetable or pattern scan.
 
+### Stage 2D2 application and HTTP boundary
+
+`RaptorRoutingService` owns the application-level operation. It first verifies
+that both namespaced stops exist in their catalog indexes, then calls the
+`RaptorRoundRouter` and passes its result to `RaptorJourneyReconstructor`. It
+returns both the diagnostic search result and the optional reconstructed
+journey internally. The service is built once around Spring's singleton
+`RaptorNetwork`; it does not rebuild the network for a request.
+
+`DebugController` exposes that operation at:
+
+```text
+POST /debug/raptor
+Content-Type: application/json
+```
+
+Request fields are:
+
+| Field | Contract |
+|---|---|
+| `fromStopId` | Required complete `feed:stop_id` origin |
+| `toStopId` | Required complete `feed:stop_id` destination |
+| `departAt` | Required ISO-8601 timestamp containing an explicit UTC offset |
+| `maxRounds` | Optional maximum boarded trips; defaults to 4; allowed range 1 through 8 |
+
+The controller validates only HTTP syntax and delegates the search. It does
+not scan a timetable, pattern, or label. The stable response projection
+includes IDs, requested departure, reachability, optional arrival/winning
+round, boardings, attempted rounds, and ordered transit legs. It deliberately
+does not serialize `RaptorSearchResult`, label maps, round objects, or the
+predecessor graph.
+
+For example, the synthetic production-path test serializes this shape:
+
+```json
+{
+  "fromStopId": "mta:A",
+  "toStopId": "mta:C",
+  "departAt": "2026-08-13T11:59:00Z",
+  "reachable": true,
+  "arrivalAt": "2026-08-13T12:25:00Z",
+  "winningRound": 1,
+  "numberOfBoardedTrips": 1,
+  "roundsAttempted": 2,
+  "legs": [
+    {
+      "tripId": "mta:DIRECT_SLOW",
+      "routeId": "mta:DIRECT",
+      "serviceId": "mta:DIRECT_CASE",
+      "serviceDate": "2026-08-13",
+      "boardingStopId": "mta:A",
+      "alightingStopId": "mta:C",
+      "boardingStopPosition": 0,
+      "alightingStopPosition": 1,
+      "departureSeconds": 28920,
+      "arrivalSeconds": 30300,
+      "departureTime": "2026-08-13T12:02:00Z",
+      "arrivalTime": "2026-08-13T12:25:00Z"
+    }
+  ]
+}
+```
+
+`roundsAttempted` can exceed `winningRound`: after finding the destination,
+the router may attempt another round before proving there are no further stop
+improvements. A journey's `numberOfBoardedTrips` and leg count equal its
+winning round.
+
+The result contracts are:
+
+- Origin equal to destination is reachable in round 0 with no legs.
+- A valid disconnected destination is HTTP 200 with `reachable=false`, no
+  `arrivalAt`/`winningRound`, and an empty leg list.
+- An unknown origin or destination is 404 `not_found`.
+- Malformed IDs or timestamps, missing fields, malformed JSON, and an invalid
+  round cap are 400 with stable Problem Details codes.
+- A stop in a configured feed whose load failed produces the existing 503
+  `feed_unavailable` response, including structured import diagnostics.
+- Repeated identical requests have deterministic response ordering.
+
+### Running transit-only debug queries
+
+Start the backend on its default port 8081 with both frozen feeds enabled, then
+run these fixed-date requests. They never depend on the current clock.
+
+Reachable MTA Penn Station to 181 St:
+
+```bash
+curl -sS -X POST http://localhost:8081/debug/raptor \
+  -H 'Content-Type: application/json' \
+  -d '{"fromStopId":"mta:A28N","toStopId":"mta:A06N","departAt":"2026-08-13T17:00:00-04:00","maxRounds":4}'
+```
+
+Reachable LIRR Penn Station to Woodmere:
+
+```bash
+curl -sS -X POST http://localhost:8081/debug/raptor \
+  -H 'Content-Type: application/json' \
+  -d '{"fromStopId":"lirr:237","toStopId":"lirr:217","departAt":"2026-08-13T17:00:00-04:00","maxRounds":4}'
+```
+
+Valid but unreachable cross-feed request, because Stage 2 has no MTA-LIRR
+transfer edge:
+
+```bash
+curl -sS -X POST http://localhost:8081/debug/raptor \
+  -H 'Content-Type: application/json' \
+  -d '{"fromStopId":"mta:A28N","toStopId":"lirr:217","departAt":"2026-08-13T17:00:00-04:00","maxRounds":4}'
+```
+
+Malformed request with an offset-free timestamp:
+
+```bash
+curl -sS -X POST http://localhost:8081/debug/raptor \
+  -H 'Content-Type: application/json' \
+  -d '{"fromStopId":"mta:A28N","toStopId":"mta:A06N","departAt":"2026-08-13T17:00:00"}'
+```
+
+These are exact-stop, schedule-only queries. No access walk, platform change,
+station matching, transfer path, or destination egress is implied.
+
+### Stage 2 completion audit
+
+| Requirement | Verified implementation |
+|---|---|
+| One immutable composite timetable | Stage 2A builds one singleton `RaptorNetwork` over all available feed contexts |
+| Preserve complete GTFS trips | Every `RaptorTripSchedule` remains one original namespaced trip with its full ordered stops |
+| Legal, service-aware ride scan | Stage 2B checks calendars, catchability, pickup/drop-off, extended time, and explicit feed timezone |
+| Marked-stop earliest-arrival rounds | Stage 2C scans only patterns at improved stops and applies deterministic time-only dominance |
+| One ride is one round | Staying aboard through any number of stops consumes one round; boarding a different trip consumes another |
+| One boarded trip is one leg | Stage 2D1 validates and reconstructs exactly one chronological leg per incoming ride |
+| Thin HTTP exposure | Stage 2D2 delegates to `RaptorRoutingService` and projects stable fields without exposing internal state |
+| Namespace and determinism | Feed-scoped IDs survive every layer; immutable sorted structures and tie-breakers remain intact |
+| Explicit time semantics | GTFS service-day offsets, including values above 24 hours, resolve only with service date and feed timezone |
+| Scope boundary | No walking, physical/cross-feed transfer edge, GraphHopper, sprint state, Pareto bag, OTP routing, or frontend work was added |
+
+This is implementation completion, not a claim of completed human review.
+
 ## A concrete row from file to JSON
 
 Consider this synthetic row:
@@ -851,7 +995,7 @@ test consumes it beyond fixture-integrity checks.
 
 ### Search-result lifecycle
 
-Stage 2D1 adds `RaptorJourney`, `RaptorTransitLeg`, and
+Stage 2D1 added `RaptorJourney`, `RaptorTransitLeg`, and
 `RaptorJourneyReconstructor`. The reconstructor consumes the immutable
 `RaptorSearchResult`, follows its winning labels to round zero, and produces an
 ordered transit-only journey. The journey deliberately retains that exact
@@ -862,8 +1006,11 @@ An unreachable search reconstructs to `Optional.empty()`. A reachable
 origin-equals-destination search reconstructs to a zero-leg journey whose
 arrival equals the requested departure. Otherwise, the number of transit legs
 equals the winning round. Waiting is visible as a timestamp gap between legs,
-not represented as a new edge. There is still no general `Itinerary`, walking
-leg, `FootpathService`, `/debug/raptor`, or `/plan` production type.
+not represented as a new edge. Stage 2D2's application service and debug DTOs
+then select only the user-readable fields for JSON. The internal result remains
+available to Java callers but is not exposed as an HTTP object graph. There is
+still no general multimodal `Itinerary`, walking leg, `FootpathService`, or
+`/plan` production type.
 
 ## Test-data lifecycles
 
@@ -880,6 +1027,13 @@ frozen real feeds remain unchanged.
 Additional owned test feeds/records prove behaviors that the tiny checked-in
 fixture does not naturally contain, including a five-stop run and `49:xx`
 service. Those cases still use SprintWise domain/index code.
+
+`backend/src/test/resources/fixtures/synthetic-raptor-gtfs` is a second tiny,
+valid GTFS directory dedicated to full production-path endpoint tests. It is
+loaded through the same `OneBusAwayGtfsLoader`, catalog, index, and network
+builder as real data. Its schedules distinguish one five-stop train from two-
+and three-train same-route journeys, and include a previous-service-date
+`24:xx` train plus a disconnected stop.
 
 ### Frozen MTA integration
 
@@ -921,13 +1075,16 @@ is absent.
 ### Real marked-round search integration
 
 The `real-mta-lirr-round-search` profile loads both frozen feeds through the
-same production adapter, catalog, compact network, scanner, and round router in
-a separate `-Xmx2G` JVM. It proves a one-round MTA ride from northbound 34
+same production adapter, catalog, compact network, and Stage 2D2 routing
+service in a separate `-Xmx2G` JVM. It proves a one-round MTA ride from northbound 34
 St-Penn Station (`mta:A28N`) to 181 St (`mta:A06N`) and a one-round LIRR ride
 from Penn Station (`lirr:237`) to Woodmere (`lirr:217`) at an explicit time on
-2026-08-13. Stage 2D1 also reconstructs each result as one immutable real
-transit leg and verifies every ID, service date, GTFS offset, and `Instant`
-against its selected ride. It prints the legs, completed rounds, marked labels,
+2026-08-13. The service reconstructs each result as one immutable real transit
+leg and verifies every ID, service date, GTFS offset, and `Instant` against its
+selected ride. The real-MTA HTTP integration test also invokes
+`POST /debug/raptor` for the same subway case. The combined profile proves the
+same application-service contract for LIRR without adding a second router or
+feed-specific branch. It prints the legs, completed rounds, marked labels,
 pattern-scan counts, and search time. It skips if either frozen feed directory
 is absent.
 
@@ -963,7 +1120,7 @@ application architecture.
 | `backend/src/main/java/com/` | Reverse-domain package hierarchy root |
 | `backend/src/main/java/com/sprintwise/` | SprintWise application package and Spring component-scan root |
 | `backend/src/main/java/com/sprintwise/config/` | Spring properties and bean wiring |
-| `backend/src/main/java/com/sprintwise/debug/` | Read-only Stage 1 HTTP endpoints, DTOs, and HTTP error translation |
+| `backend/src/main/java/com/sprintwise/debug/` | Read-only Stage 1 inspection plus the Stage 2 transit-routing debug endpoint, DTOs, and HTTP error translation |
 | `backend/src/main/java/com/sprintwise/gtfs/` | Parser-neutral loading interface, diagnostics, and load exception |
 | `backend/src/main/java/com/sprintwise/gtfs/onebusaway/` | The only production boundary allowed to depend on OneBusAway |
 | `backend/src/main/java/com/sprintwise/gtfs/calendar/` | Active-service calculation |
@@ -988,6 +1145,7 @@ application architecture.
 | `backend/src/test/resources/` | Test inputs copied onto the Maven test classpath |
 | `backend/src/test/resources/fixtures/` | Parent for owned synthetic fixtures |
 | `backend/src/test/resources/fixtures/synthetic-gtfs/` | Tiny valid GTFS feed plus future mock walking data |
+| `backend/src/test/resources/fixtures/synthetic-raptor-gtfs/` | Tiny valid GTFS feed for one-, two-, and three-trip endpoint journeys |
 | `backend/src/test/resources/golden/` | Normalized real OTP baseline JSON |
 | `backend/target/` | Generated Maven output; safe to recreate, not maintained source |
 | `backend/target/classes/` | Compiled production classes and copied runtime resources |
@@ -1033,11 +1191,14 @@ application architecture.
 | File | What it does |
 |---|---|
 | `config/GtfsProperties.java` | Spring binding object for the list of feed IDs, paths, and enabled flags |
-| `config/TransitConfiguration.java` | Creates the parser-neutral loader, singleton `TransitFeedCatalog`, and derived composite `RaptorNetwork` |
+| `config/TransitConfiguration.java` | Creates the parser-neutral loader, singleton `TransitFeedCatalog`, derived composite `RaptorNetwork`, and routing service |
 | `service/TransitFeedCatalog.java` | Validates configuration, loads enabled feeds once, sorts entries, and dispatches feed/index access |
 | `service/TransitFeedEntry.java` | Immutable available feed/index pair or retained unavailable-feed state, including construction timing |
 | `service/UnknownFeedException.java` | Signals the documented unknown-or-disabled feed contract |
 | `service/FeedUnavailableException.java` | Carries feed ID, source path, cause, and optional structured diagnostic after startup loading fails |
+| `service/RaptorRoutingService.java` | Reuses the singleton network to validate stops, run RAPTOR, and reconstruct the optional journey outside HTTP code |
+| `service/RaptorRoutingOutcome.java` | Immutable pairing of the retained search result and its reachable optional journey |
+| `service/UnknownTransitStopException.java` | Identifies an unknown namespaced routing origin or destination for HTTP 404 translation |
 
 ### GTFS boundary and diagnostics
 
@@ -1105,8 +1266,8 @@ application architecture.
 
 | File | What it does |
 |---|---|
-| `debug/DebugController.java` | Implements stop, departure, trip, and active-service inspection endpoints and validates request syntax |
-| `debug/DebugApiExceptionHandler.java` | Converts request, not-found, and feed failures into HTTP Problem Details JSON |
+| `debug/DebugController.java` | Implements Stage 1 inspection plus `POST /debug/raptor`; validates HTTP syntax and delegates routing |
+| `debug/DebugApiExceptionHandler.java` | Converts request, malformed-JSON, unknown-stop, and feed failures into HTTP Problem Details JSON |
 | `debug/DebugBadRequestException.java` | Internal request-validation exception with a stable code |
 | `debug/DebugNotFoundException.java` | Internal unknown-resource exception |
 | `debug/StopDebugResponse.java` | JSON projection of a `Stop` |
@@ -1114,6 +1275,9 @@ application architecture.
 | `debug/TripDebugResponse.java` | JSON projection of a `Trip` plus ordered stop times |
 | `debug/StopTimeDebugResponse.java` | Current limited JSON projection of stop-time identity/sequence/times |
 | `debug/ActiveServicesDebugResponse.java` | JSON projection of sorted services active on one date |
+| `debug/RaptorRouteDebugRequest.java` | JSON input contract for namespaced stops, explicit timestamp, and optional round cap |
+| `debug/RaptorRouteDebugResponse.java` | Stable top-level journey JSON that omits internal labels and predecessor state |
+| `debug/RaptorTransitLegDebugResponse.java` | JSON projection of one reconstructed scheduled transit leg |
 
 ### Test classes
 
@@ -1131,11 +1295,12 @@ application architecture.
 | `raptor/RaptorPatternScannerTest.java` | Catchability, calendars, extended times, access restrictions, missing times, repeated stops, ties, namespaces, and overtaking scans |
 | `raptor/RealPatternScannerIT.java` | Same production scanner resolves explicit real MTA and LIRR rides under `-Xmx2G` |
 | `raptor/RaptorRoundRouterTest.java` | One-/two-/three-trip rounds and journeys, same-route train changes, waits, exact transfers, service rules, 24:xx, chain validation, namespaces, and immutability |
-| `raptor/RealRaptorRoundSearchIT.java` | Same round engine and reconstructor produce fixed-date Penn-to-181 St MTA and Penn-to-Woodmere LIRR journeys under `-Xmx2G` |
-| `debug/DebugControllerTest.java` | All debug endpoints and their 400/404/503 JSON contracts using synthetic production loading |
+| `raptor/RealRaptorRoundSearchIT.java` | Stage 2D2 application service produces fixed-date Penn-to-181 St MTA and Penn-to-Woodmere LIRR journeys under `-Xmx2G` |
+| `debug/DebugControllerTest.java` | All debug endpoints and their 200/400/404/503 JSON contracts using synthetic production loading |
+| `debug/RaptorDebugControllerTest.java` | Full production-path HTTP proof of one five-stop leg, two/three trip changes, extended times, zero-leg, and unreachable results |
 | `index/RealMtaIndexSizeIT.java` | Frozen MTA fits under `-Xmx2G` and reports entity, time, heap, and duplication measurements |
 | `index/RealLirrStage1CompatibilityIT.java` | Frozen LIRR loader/index compatibility, extended-time behavior, references, and memory measurements |
-| `debug/RealMtaDebugApiIT.java` | Known real stop, departure, trip, and service lookups work through Spring HTTP components |
+| `debug/RealMtaDebugApiIT.java` | Known real inspection lookups and the Penn-to-181 St RAPTOR request work through Spring HTTP components |
 
 ### Synthetic and golden resources
 
@@ -1151,6 +1316,8 @@ application architecture.
 | `calendar_dates.txt` | Addition/removal and direct-case exceptions |
 | `feed_info.txt` | Minimal valid feed metadata for the GTFS fixture |
 | `mock-graphhopper-footpaths.csv` | Future deterministic walking edges; not GTFS and not current production GraphHopper data |
+| `fixtures/synthetic-raptor-gtfs/README.md` | Diagram and exact journey cases for the dedicated endpoint fixture |
+| `fixtures/synthetic-raptor-gtfs/*.txt` | Valid agency, stops, routes, trips, stop times, calendar, and metadata used by endpoint tests |
 | `golden/otp-real-baseline.json` | Normalized OTP facts for frozen real-world golden cases |
 
 ### Frozen data and OTP files
@@ -1232,16 +1399,22 @@ permanent architecture.
   search result.
 - Unreachable searches have no journey; origin-equals-destination has a
   reachable zero-leg journey.
-- Debug controllers inspect data but contain no routing algorithm.
+- The singleton `RaptorNetwork` is reused by `RaptorRoutingService`; routing
+  requests never rebuild it.
+- The RAPTOR HTTP response is a stable projection and never serializes labels,
+  rounds, best-label maps, or predecessor pointers.
+- Debug controllers validate and project requests but contain no timetable
+  scanning, RAPTOR round, or reconstruction algorithm.
 - The frozen source files are not mutated by normal startup or tests.
 
 ## Known limitations and honest next boundaries
 
 - Human review of Stage 1 is still pending.
+- Stage 2 is implementation-complete but still pending human review.
 - MTA and LIRR coexist, but there is no station-correspondence model or
   cross-feed transfer/routing logic.
-- Exact-stop transit rounds and backtrace can produce a transit journey, but no
-  HTTP routing endpoint exposes it yet.
+- `POST /debug/raptor` exposes exact-stop, transit-only journeys; it is a debug
+  boundary, not the final multimodal `/plan` product API.
 - Reboarding currently has zero transfer slack and cannot cross between parent,
   child, nearby, or corresponding station stops.
 - Pickup/drop-off semantics are enforced by the pattern scanner but remain
@@ -1256,6 +1429,6 @@ permanent architecture.
 - GraphHopper and all walking/sprinting logic are still absent.
 - The frontend is only a package placeholder.
 
-Stage 2D1 is implemented. The remaining Stage 2 work is the transit-only debug
-routing endpoint and final Stage 2 audit. Walking and physical transfer edges
-remain deferred.
+Stage 2A through Stage 2D2 are implementation-complete, pending human review.
+Walking, physical transfer edges, station correspondence, GraphHopper, and the
+multicriteria/sprint search remain deliberately deferred to later phases.

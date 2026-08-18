@@ -1,0 +1,10 @@
+stop_id,stop_name,stop_lat,stop_lon,location_type
+A,Alpha,40.0000,-74.0000,0
+B,Beta,40.0100,-74.0000,0
+C,Charlie,40.0200,-74.0000,0
+D,Delta,40.0300,-74.0000,0
+E,Echo,40.0400,-74.0000,0
+P,Platform P,40.0100,-73.9900,0
+Q,Platform Q,40.0200,-73.9900,0
+R,Platform R,40.0300,-73.9900,0
+ISOLATED,Isolated,40.0500,-74.0000,0
