@@ -330,9 +330,10 @@ changing those Stage 1 guarantees.
 - Next departures from a known stop match OTP or a GTFS viewer
 - Weekday vs weekend service filtering works
 
-**Stage 1 handoff:** Stage 2A now consumes the full ordered trips and access
-semantics to build trip patterns and compact integer/array indexes. RAPTOR
-labels, ride scanning, backtrace, GraphHopper, and sprint behavior remain
+**Stage 1 handoff:** Stage 2A consumes the full ordered trips and access
+semantics to build trip patterns and compact integer/array indexes. Stage 2B
+uses the retained Stage 1 calendar/time context to scan one requested pattern.
+RAPTOR labels, rounds, backtrace, GraphHopper, and sprint behavior remain
 deferred.
 
 **Suggested AI prompt:** *Implement GTFS loader + timetable index for MTA subway only. Add debug REST endpoints and tests for three known stop IDs.*
@@ -374,9 +375,32 @@ non-overtaking timetable patterns. Both-missing intermediate times remain a
 private missing sentinel exposed as empty optional values; Stage 2A performs no
 interpolation.
 
+**Stage 2B implementation status:** Service-aware single-pattern ride scanning
+is implemented. `RaptorPatternScanner` accepts one compact pattern index, one
+compact boarding-stop index, and an explicit earliest-boarding `Instant`. It
+checks every matching boarding position and only the trips inside that pattern.
+Stage 1 supplies overlapping service dates, calendar exceptions, agency-
+timezone conversion, extended-time handling, and DST policy.
+
+Boarding requires ordinary pickup, a known departure, active service, and a
+departure no earlier than the query. Alighting requires a downstream position,
+ordinary drop-off, and a known arrival. Missing intermediate times and
+prohibited drop-off positions may be carried through without interpolation.
+For each downstream pattern position, the scanner returns at most one immutable
+`RaptorRide`, with deterministic preference by arrival instant, departure
+instant, trip ID, service date, alighting position, and boarding position. Each
+ride remains on one individual trip and retains the fields needed by later
+backtrace. No marked-stop processing, rounds, transfers, or endpoints were
+added.
+
+The scanner is correctness-first and scans only the selected pattern. With
+`B` matching boarding positions, `T` pattern trips, `D` overlapping service
+dates, and `L` stops, its worst case is `O(B*T*D*L)`; it caches calendar work
+within the call and adds no persistent per-position timetable duplication.
+
 **Build:**
 
-- Stage 2B onward: exercise a small fixed-stop network with at least two useful
+- Stage 2C onward: exercise a small fixed-stop network with at least two useful
   patterns; do not embed a one-line corridor restriction into the reusable core
 - Classic RAPTOR: mark stops → scan trips → extend labels → repeat
 - Journey backtrace → `(boardStop, tripId, alightStop, times)`

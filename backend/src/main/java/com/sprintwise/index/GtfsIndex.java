@@ -166,6 +166,19 @@ public final class GtfsIndex {
         return calendarResolver.activeServiceIds(serviceDate);
     }
 
+    /**
+     * Returns service dates whose feed-derived timetable span overlaps the query instant.
+     * This includes prior service dates when extended GTFS times reach past civil midnight.
+     */
+    public List<LocalDate> serviceDateCandidates(Instant queryInstant) {
+        return timeResolver.serviceDateCandidates(queryInstant);
+    }
+
+    /** Resolves a GTFS service-date offset using this feed's explicit agency timezone. */
+    public Instant resolveServiceTime(ServiceTime serviceTime) {
+        return timeResolver.toInstant(serviceTime);
+    }
+
     private void addCandidateDepartures(
         List<ScheduledDeparture> schedule,
         LocalDate serviceDate,

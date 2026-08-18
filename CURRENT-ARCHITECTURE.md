@@ -1,8 +1,8 @@
-# SprintWise current architecture (Stage 2A composite RAPTOR index)
+# SprintWise current architecture (Stage 2B single-pattern ride scanner)
 
 (Reminder to hit command shift v to view in markdown view)
 
-This document explains the repository as it exists after Stage 2A. It is meant
+This document explains the repository as it exists after Stage 2B. It is meant
 to let my incoming partner @ Zach Rosenberg gain a thorough and deep understanding of the project as it stands.
 
 Last checked against the working tree: 2026-08-18.
@@ -138,9 +138,9 @@ not from the Route record alone.
 
 ## The most important fact
 
-SprintWise does **not** route journeys yet.
+SprintWise does **not** route complete journeys yet.
 
-The completed Stage 1 and Stage 2A backend can:
+The completed Stage 1, Stage 2A, and Stage 2B backend can:
 
 - Read independently configured MTA and LIRR static GTFS feeds.
 - Convert parser-owned objects into immutable SprintWise-owned records.
@@ -149,13 +149,17 @@ The completed Stage 1 and Stage 2A backend can:
 - Build an immutable in-memory timetable index.
 - Derive one immutable composite `RaptorNetwork` containing compact MTA and
   LIRR stop/trip indexes and trip patterns.
+- Given one pattern, one boarding stop, and one explicit `Instant`, select
+  active catchable trip occurrences and return the earliest legal ride to each
+  downstream pattern position.
 - Resolve active services and departures, including `24:xx`, `49:xx`, and DST.
 - Expose read-only debug HTTP endpoints for inspecting that data.
 
 It cannot yet:
 
 - Plan an origin-to-destination journey.
-- Board a train and scan downstream stops with RAPTOR.
+- Search every useful pattern from an origin or repeat RAPTOR rounds.
+- Transfer between trips or reconstruct a complete journey.
 - Connect an MTA stop to an LIRR stop or plan a journey across feeds.
 - Use `transfers.txt`, shapes, OSM, GraphHopper, or the OTP graph in its own
   backend search.
@@ -166,7 +170,7 @@ It cannot yet:
 
 The root `README.md` describes parts of the intended finished product, including
 a custom routing algorithm and live data. Those statements are aspirational;
-they do not describe the current Stage 1/Stage 2A implementation. For the planned build
+they do not describe the current Stage 1/Stage 2 implementation. For the planned build
 sequence, use `docs/ROUTING-PLAN.md`.
 
 ## Architecture at a glance
@@ -194,7 +198,12 @@ data/gtfs/mta/                         data/gtfs/lirr/
        compact stops, trips,      namespace selects
        patterns, feed contexts    one Stage 1 index
                 |                      |
-       no routing rounds yet      JSON / Problem Details
+                v                      |
+       RaptorPatternScanner              |
+       one pattern + board stop           |
+                |                      |
+       immutable RaptorRide(s)    JSON / Problem Details
+       no routing rounds yet
 ```
 
 There is no database in this flow. The final state of successfully loaded data
@@ -493,6 +502,53 @@ pattern times its stop count; the frozen combined build currently completes in
 well under a second, so Stage 2A keeps the clearer policy and records this as a
 future scaling consideration.
 
+### Stage 2B single-pattern scanning
+
+`RaptorPatternScanner` is a query-time primitive over the immutable network. Its
+contract is:
+
+```java
+new RaptorPatternScanner(network).scan(
+    patternIndex,
+    boardingStopIndex,
+    earliestBoardingInstant
+)
+```
+
+The scanner considers only trips already assigned to that pattern. It finds
+every occurrence of the boarding stop in the pattern, requires ordinary pickup
+and a known departure at or after the supplied `Instant`, and filters each trip
+through its feed's Stage 1 service calendar. It asks the retained `GtfsIndex`
+for overlapping service dates and converts GTFS offsets with that feed's
+explicit agency timezone. This naturally includes a previous service date for
+catchable `24:xx` or later trips and retains the existing noon-minus-twelve DST
+policy; the machine timezone is never consulted.
+
+For each downstream pattern position, the scanner returns at most one immutable
+`RaptorRide`: the earliest legal arrival obtainable from the boarding state.
+The result records the individual trip, route, service date, boarding and
+alighting indexes/positions, GTFS seconds, and resolved `Instant` values needed
+by later journey backtrace. Each result stays on one trip throughout; grouping
+trips in a pattern does not permit switching vehicles.
+
+Boarding requires ordinary pickup and a known departure. Alighting requires
+ordinary drop-off and a known arrival. A passenger already aboard may pass
+through a missing/missing intermediate position or a stop where drop-off is
+prohibited and still reach a later usable stop. No time is interpolated.
+
+Candidate preference and returned ordering are deterministic: arrival
+`Instant`, departure `Instant`, trip ID, service date, alighting position, then
+boarding position. A valid compact stop absent from the pattern returns an
+immutable empty list; invalid compact pattern/stop indexes are argument errors.
+
+For `B` matching boarding positions, `T` trips in the requested pattern, `D`
+overlapping service dates, and `L` pattern positions, the current correctness-
+first implementation is `O(B*T*D*L)`. Active services and candidate dates are
+cached within one call. It never scans trips in another pattern and adds no
+large persistent per-position index. Stage 2A's non-overtaking partitions are
+preserved, but missing-time correctness does not depend on every trip having a
+time at every position.
+
 ## A concrete row from file to JSON
 
 Consider this synthetic row:
@@ -688,11 +744,11 @@ test consumes it beyond fixture-integrity checks.
 ### Journey lifecycle
 
 There is no actual journey object or journey lifecycle yet. There are no
-`Journey`, `Leg`, `Itinerary`, `Label`, round scanner, `FootpathService`, or
-`/plan` production types. The only resolved transit event is still a single
-departure from a single stop. Stage 2A supplies trip-pattern and compact
-RAPTOR-specific structures; Stage 2B must add query-time service selection and
-the first transit-round scan.
+`Journey`, `Leg`, `Itinerary`, `Label`, round engine, `FootpathService`, or
+`/plan` production types. Stage 2B can now resolve an uninterrupted
+`RaptorRide` within one explicitly selected pattern, but nothing yet discovers
+all useful patterns from an origin, transfers to another trip, repeats rounds,
+or backtraces a complete journey.
 
 ## Test-data lifecycles
 
@@ -738,6 +794,15 @@ overtaking structures into 860 final safe patterns. The most recent run took
 about 0.11 seconds and added approximately 10 MiB beyond the retained Stage 1
 catalog. The profile skips when either frozen directory is absent.
 
+### Real single-pattern scanner integration
+
+The `real-mta-lirr-pattern-scan` profile loads both frozen feeds through the
+production adapter/catalog/network path, then proves the same Stage 2B scanner
+can resolve one real MTA ride and one real LIRR ride under `-Xmx2G`. It derives
+explicit timestamps from dates inside the frozen snapshots and never uses the
+current clock for routing assertions. The profile skips when either directory
+is absent.
+
 ### Golden data
 
 `otp-real-baseline.json` stores normalized expected facts for real reference
@@ -777,7 +842,7 @@ application architecture.
 | `backend/src/main/java/com/sprintwise/gtfs/time/` | GTFS service time/date/instant conversion |
 | `backend/src/main/java/com/sprintwise/model/` | Immutable SprintWise transit-domain records |
 | `backend/src/main/java/com/sprintwise/index/` | Immutable lookup structures and resolved departure types |
-| `backend/src/main/java/com/sprintwise/raptor/` | Composite compact RAPTOR network, trip patterns, and schedules; no search yet |
+| `backend/src/main/java/com/sprintwise/raptor/` | Composite compact RAPTOR timetable plus the single-pattern ride-scanning primitive; no rounds yet |
 | `backend/src/main/java/com/sprintwise/service/` | Application-lifetime catalog of independent feed/index snapshots or failures |
 | `backend/src/main/resources/` | Runtime Spring configuration |
 | `backend/src/test/` | Backend test code and test-only data |
@@ -790,7 +855,7 @@ application architecture.
 | `backend/src/test/java/com/sprintwise/gtfs/calendar/` | Weekly and exception-calendar tests |
 | `backend/src/test/java/com/sprintwise/gtfs/time/` | Midnight, maximum-span, timezone, and DST tests |
 | `backend/src/test/java/com/sprintwise/index/` | Timetable index unit tests and real-feed memory integration test |
-| `backend/src/test/java/com/sprintwise/raptor/` | Composite pattern/index unit tests and isolated real-network measurement |
+| `backend/src/test/java/com/sprintwise/raptor/` | Pattern/index/scanner unit tests and isolated real-feed proofs |
 | `backend/src/test/java/com/sprintwise/service/` | Multi-feed catalog, failure-isolation, and combined-real-feed tests |
 | `backend/src/test/resources/` | Test inputs copied onto the Maven test classpath |
 | `backend/src/test/resources/fixtures/` | Parent for owned synthetic fixtures |
@@ -831,7 +896,7 @@ application architecture.
 
 | File | What it does |
 |---|---|
-| `backend/pom.xml` | Defines Java/Spring/OneBusAway plus isolated MTA, LIRR, combined-catalog, and composite-RAPTOR real-data profiles |
+| `backend/pom.xml` | Defines Java/Spring/OneBusAway plus isolated Stage 1, composite-RAPTOR, and pattern-scanner real-data profiles |
 | `backend/src/main/resources/application.yml` | Sets port 8081 and independent MTA/LIRR paths and enabled flags |
 | `backend/src/main/java/com/sprintwise/SprintWiseApplication.java` | Spring Boot entry point and component-scan root |
 
@@ -898,6 +963,8 @@ application architecture.
 | `raptor/RaptorTripPattern.java` | Shared route/direction/stop/access structure and one non-overtaking group of trip indexes |
 | `raptor/RaptorTripSchedule.java` | One complete individual trip with private compact sequence/arrival/departure arrays |
 | `raptor/RaptorNetworkStats.java` | Counts feeds, compact entities, patterns, overtaking partitions, and stored positions |
+| `raptor/RaptorPatternScanner.java` | Applies calendars, catchability, access rules, and per-position earliest-arrival selection within one requested pattern |
+| `raptor/RaptorRide.java` | Immutable one-trip boarding/alighting result with service date, GTFS offsets, and concrete instants |
 
 ### Debug HTTP layer
 
@@ -926,6 +993,8 @@ application architecture.
 | `service/CombinedFrozenFeedsCatalogIT.java` | Simultaneous frozen MTA/LIRR indexes fit under 2 GiB and preserve namespace isolation |
 | `raptor/RaptorNetworkTest.java` | Composite namespacing, grouping, complete trips, missing times, access differences, immutability, and overtaking partitions |
 | `raptor/CompositeRaptorNetworkIT.java` | Frozen MTA/LIRR composite pattern index fits under `-Xmx2G` and retains every Stage 1 trip |
+| `raptor/RaptorPatternScannerTest.java` | Catchability, calendars, extended times, access restrictions, missing times, repeated stops, ties, namespaces, and overtaking scans |
+| `raptor/RealPatternScannerIT.java` | Same production scanner resolves explicit real MTA and LIRR rides under `-Xmx2G` |
 | `debug/DebugControllerTest.java` | All debug endpoints and their 400/404/503 JSON contracts using synthetic production loading |
 | `index/RealMtaIndexSizeIT.java` | Frozen MTA fits under `-Xmx2G` and reports entity, time, heap, and duplication measurements |
 | `index/RealLirrStage1CompatibilityIT.java` | Frozen LIRR loader/index compatibility, extended-time behavior, references, and memory measurements |
@@ -1024,9 +1093,10 @@ permanent architecture.
 - Human review of Stage 1 is still pending.
 - MTA and LIRR coexist, but there is no station-correspondence model or
   cross-feed transfer/routing logic.
-- Trip patterns exist, but no RAPTOR label, round scan, backtrace, or journey
-  result exists yet.
-- Pickup/drop-off semantics are retained but not applied to a routing decision.
+- Individual patterns can be scanned, but no RAPTOR label, marked-stop round,
+  backtrace, or complete journey result exists yet.
+- Pickup/drop-off semantics are enforced by the pattern scanner but remain
+  absent from current trip debug JSON.
 - Pickup/drop-off fields are not present in current trip debug JSON.
 - Missing intermediate times are not interpolated.
 - Transfers and shape geometry are ignored.
@@ -1037,6 +1107,6 @@ permanent architecture.
 - GraphHopper and all walking/sprinting logic are still absent.
 - The frontend is only a package placeholder.
 
-Stage 2A is implemented. Stage 2B should add query-time per-feed service
-contexts and one-round transit scanning without introducing walking or
-transfers.
+Stage 2B is implemented. The next Stage 2 work should compose this primitive
+into marked-stop RAPTOR rounds without introducing walking or physical
+transfer edges yet.
