@@ -20,11 +20,6 @@ public final class ServiceTimeResolver {
 
     private final ZoneId agencyZoneId;
     private final int maximumScheduledTimeSeconds;
-    private final int serviceDateLookbackDays;
-
-    public ServiceTimeResolver(ZoneId agencyZoneId) {
-        this(agencyZoneId, 0);
-    }
 
     public ServiceTimeResolver(ZoneId agencyZoneId, int maximumScheduledTimeSeconds) {
         this.agencyZoneId = Objects.requireNonNull(agencyZoneId, "agencyZoneId");
@@ -32,7 +27,6 @@ public final class ServiceTimeResolver {
             throw new IllegalArgumentException("maximumScheduledTimeSeconds must not be negative");
         }
         this.maximumScheduledTimeSeconds = maximumScheduledTimeSeconds;
-        this.serviceDateLookbackDays = maximumScheduledTimeSeconds / (24 * 60 * 60);
     }
 
     public static ServiceTimeResolver forFeed(GtfsFeed feed) {
@@ -53,10 +47,6 @@ public final class ServiceTimeResolver {
 
     public int maximumScheduledTimeSeconds() {
         return maximumScheduledTimeSeconds;
-    }
-
-    public int serviceDateLookbackDays() {
-        return serviceDateLookbackDays;
     }
 
     /**

@@ -108,7 +108,6 @@ class ServiceTimeResolverTest {
         ).toInstant();
 
         assertEquals(177_300, resolver.maximumScheduledTimeSeconds());
-        assertEquals(2, resolver.serviceDateLookbackDays());
         assertEquals(
             List.of(
                 LocalDate.of(2026, 8, 15),

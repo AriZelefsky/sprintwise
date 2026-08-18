@@ -282,6 +282,11 @@ class DebugControllerTest {
                 "invalid_max_rounds"
             );
         }
+        mockMvc.perform(post("/debug/raptor")
+                .contentType(MediaType.APPLICATION_JSON))
+            .andExpect(status().isBadRequest())
+            .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+            .andExpect(jsonPath("$.code").value("missing_request_body"));
         assertRaptorProblem("{not-json}", 400, "malformed_json");
     }
 

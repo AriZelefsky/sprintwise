@@ -1,7 +1,6 @@
 package com.sprintwise.debug;
 
 import com.sprintwise.gtfs.GtfsImportDiagnostic;
-import com.sprintwise.gtfs.GtfsLoadException;
 import com.sprintwise.service.FeedUnavailableException;
 import com.sprintwise.service.UnknownFeedException;
 import com.sprintwise.service.UnknownTransitStopException;
@@ -92,18 +91,6 @@ public final class DebugApiExceptionHandler {
         problem.setProperty("feedId", exception.feedId());
         problem.setProperty("source", exception.source().toString());
         exception.diagnostic().ifPresent(diagnostic -> addDiagnostic(problem, diagnostic));
-        return problem;
-    }
-
-    @ExceptionHandler(GtfsLoadException.class)
-    ProblemDetail feedLoadFailure(GtfsLoadException exception) {
-        ProblemDetail problem = problem(
-            HttpStatus.SERVICE_UNAVAILABLE,
-            "GTFS feed unavailable",
-            exception.getMessage(),
-            "feed_unavailable"
-        );
-        addDiagnostic(problem, exception.diagnostic());
         return problem;
     }
 

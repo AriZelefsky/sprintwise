@@ -18,10 +18,6 @@ public enum PickupDropOffType {
         this.ordinaryUseAllowed = ordinaryUseAllowed;
     }
 
-    public int gtfsValue() {
-        return gtfsValue;
-    }
-
     /** True only when no advance arrangement is needed. */
     public boolean allowsOrdinaryUse() {
         return ordinaryUseAllowed;

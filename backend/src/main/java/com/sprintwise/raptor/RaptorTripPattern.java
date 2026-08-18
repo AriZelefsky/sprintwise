@@ -16,7 +16,6 @@ public final class RaptorTripPattern {
     private final PickupDropOffType[] pickupTypes;
     private final PickupDropOffType[] dropOffTypes;
     private final int[] tripIndexes;
-    private final int overtakingGroupIndex;
     private final int overtakingGroupCount;
 
     RaptorTripPattern(
@@ -27,7 +26,6 @@ public final class RaptorTripPattern {
         PickupDropOffType[] pickupTypes,
         PickupDropOffType[] dropOffTypes,
         int[] tripIndexes,
-        int overtakingGroupIndex,
         int overtakingGroupCount
     ) {
         this.index = index;
@@ -37,7 +35,6 @@ public final class RaptorTripPattern {
         this.pickupTypes = pickupTypes.clone();
         this.dropOffTypes = dropOffTypes.clone();
         this.tripIndexes = tripIndexes.clone();
-        this.overtakingGroupIndex = overtakingGroupIndex;
         this.overtakingGroupCount = overtakingGroupCount;
         if (
             this.stopIndexes.length != this.pickupTypes.length
@@ -96,10 +93,6 @@ public final class RaptorTripPattern {
 
     public boolean wasSplitForOvertaking() {
         return overtakingGroupCount > 1;
-    }
-
-    public int overtakingGroupIndex() {
-        return overtakingGroupIndex;
     }
 
     public int overtakingGroupCount() {

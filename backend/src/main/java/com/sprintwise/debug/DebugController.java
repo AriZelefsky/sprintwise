@@ -23,7 +23,6 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/debug")
 public final class DebugController {
 
-    private static final int DEFAULT_LIMIT = 20;
     private static final int MAX_LIMIT = 100;
     private static final int DEFAULT_RAPTOR_ROUNDS = 4;
     private static final int MAX_RAPTOR_ROUNDS = 8;
@@ -97,7 +96,7 @@ public final class DebugController {
 
     @PostMapping("/raptor")
     public RaptorRouteDebugResponse raptor(
-        @RequestBody RaptorRouteDebugRequest request
+        @RequestBody(required = false) RaptorRouteDebugRequest request
     ) {
         if (request == null) {
             throw new DebugBadRequestException(

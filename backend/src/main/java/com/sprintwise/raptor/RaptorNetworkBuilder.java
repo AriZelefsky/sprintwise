@@ -98,7 +98,6 @@ public final class RaptorNetworkBuilder {
                     key.pickupTypes().toArray(PickupDropOffType[]::new),
                     key.dropOffTypes().toArray(PickupDropOffType[]::new),
                     patternTripIndexes,
-                    groupIndex,
                     timetableGroups.size()
                 ));
                 patternStopPositions += patternStopIndexes.length;

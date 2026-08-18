@@ -3,9 +3,7 @@ package com.sprintwise.raptor;
 import java.util.Collections;
 import java.util.NavigableMap;
 import java.util.NavigableSet;
-import java.util.Optional;
 import java.util.TreeMap;
-import java.util.TreeSet;
 
 /**
  * One immutable marked-stop round.
@@ -18,7 +16,6 @@ public final class RaptorRound {
 
     private final int number;
     private final NavigableMap<Integer, RaptorLabel> improvedLabels;
-    private final NavigableSet<Integer> markedStopIndexes;
     private final int patternScanCount;
 
     RaptorRound(
@@ -44,9 +41,6 @@ public final class RaptorRound {
         this.improvedLabels = Collections.unmodifiableNavigableMap(
             new TreeMap<>(improvedLabels)
         );
-        this.markedStopIndexes = Collections.unmodifiableNavigableSet(
-            new TreeSet<>(improvedLabels.keySet())
-        );
         this.patternScanCount = patternScanCount;
     }
 
@@ -59,11 +53,7 @@ public final class RaptorRound {
     }
 
     public NavigableSet<Integer> markedStopIndexes() {
-        return markedStopIndexes;
-    }
-
-    public Optional<RaptorLabel> label(int stopIndex) {
-        return Optional.ofNullable(improvedLabels.get(stopIndex));
+        return improvedLabels.navigableKeySet();
     }
 
     public int patternScanCount() {
