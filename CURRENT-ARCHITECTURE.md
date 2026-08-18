@@ -1,11 +1,11 @@
-# SprintWise current architecture (post stage 1 completiong)
+# SprintWise current architecture (Stage 2A composite RAPTOR index)
 
 (Reminder to hit command shift v to view in markdown view)
 
-This document explains the repository as it exists after Stage 1. It is meant
+This document explains the repository as it exists after Stage 2A. It is meant
 to let my incoming partner @ Zach Rosenberg gain a thorough and deep understanding of the project as it stands.
 
-Last checked against the working tree: 2026-08-16.
+Last checked against the working tree: 2026-08-18.
 
 ## Transit vocabulary: stop, route, trip, and stop time
 
@@ -117,12 +117,13 @@ The current Stage 1 index already preserves the two key ingredients:
 - `tripsByStop`: which complete trips serve or pass through a stop.
 - `stopTimesByTrip`: the complete ordered stop sequence for each trip.
 
-Stage 2 is expected to derive a more compact **trip-pattern** or RAPTOR-specific
-index from those verified structures. A trip pattern groups trips that share the
-same ordered stop sequence, allowing many similar scheduled runs to be scanned
-efficiently. That derived pattern is different from the feed's `Route`: one
-route may require several patterns because its trips have different directions
-or stop sequences.
+Stage 2A now derives a compact **trip-pattern** index from those verified
+structures. A trip pattern groups trips that share the same route, direction,
+exact ordered `FeedScopedId` stop sequence, and pickup/drop-off sequence. The
+individual trips remain separate schedules; the pattern only shares their
+common structure. That derived pattern is different from the feed's `Route`:
+one route may require several patterns because its trips have different
+directions, stop sequences, or access rules.
 
 Routes still matter, but mostly as stable grouping and descriptive information:
 
@@ -139,13 +140,15 @@ not from the Route record alone.
 
 SprintWise does **not** route journeys yet.
 
-The completed Stage 1 backend can:
+The completed Stage 1 and Stage 2A backend can:
 
 - Read independently configured MTA and LIRR static GTFS feeds.
 - Convert parser-owned objects into immutable SprintWise-owned records.
 - Validate stops, routes, trips, stop times, calendars, references, timezones,
   and pickup/drop-off values.
 - Build an immutable in-memory timetable index.
+- Derive one immutable composite `RaptorNetwork` containing compact MTA and
+  LIRR stop/trip indexes and trip patterns.
 - Resolve active services and departures, including `24:xx`, `49:xx`, and DST.
 - Expose read-only debug HTTP endpoints for inspecting that data.
 
@@ -153,7 +156,7 @@ It cannot yet:
 
 - Plan an origin-to-destination journey.
 - Board a train and scan downstream stops with RAPTOR.
-- Plan or connect a journey between the independent MTA and LIRR indexes.
+- Connect an MTA stop to an LIRR stop or plan a journey across feeds.
 - Use `transfers.txt`, shapes, OSM, GraphHopper, or the OTP graph in its own
   backend search.
 - Perform access, transfer, or egress walking.
@@ -163,7 +166,7 @@ It cannot yet:
 
 The root `README.md` describes parts of the intended finished product, including
 a custom routing algorithm and live data. Those statements are aspirational;
-they do not describe the current Stage 1 implementation. For the planned build
+they do not describe the current Stage 1/Stage 2A implementation. For the planned build
 sequence, use `docs/ROUTING-PLAN.md`.
 
 ## Architecture at a glance
@@ -185,11 +188,13 @@ data/gtfs/mta/                         data/gtfs/lirr/
                TransitFeedCatalog
           sorted entries keyed by mta/lirr
        each owns its feed/index or load failure
-                          |
-                   DebugController
-             namespace selects exactly one index
-                          |
-          JSON response / Problem Details error
+                 /                    \
+                v                      v
+       Composite RaptorNetwork    DebugController
+       compact stops, trips,      namespace selects
+       patterns, feed contexts    one Stage 1 index
+                |                      |
+       no routing rounds yet      JSON / Problem Details
 ```
 
 There is no database in this flow. The final state of successfully loaded data
@@ -219,11 +224,16 @@ A restart parses and indexes the static files again.
    immediately builds that feed's own `GtfsIndex`.
 8. A successful entry retains both its immutable `GtfsFeed` and `GtfsIndex`.
    Requests reuse them; no request reparses GTFS.
-9. A structured `GtfsLoadException` affects only that feed. Its entry retains
+9. Spring constructs one singleton composite `RaptorNetwork` from every
+   available catalog entry. It retains references to the immutable Stage 1
+   feed/index contexts and derives compact global stop/trip IDs, patterns, and
+   stop-to-pattern arrays. Failed entries are listed as unavailable and remain
+   owned by the catalog with their original diagnostic.
+10. A structured `GtfsLoadException` affects only that feed. Its entry retains
    one `FeedUnavailableException`, so requests for it return HTTP 503 while
    other entries remain usable. Unexpected programming/configuration failures
    still abort startup instead of being mislabeled as bad feed data.
-10. Disabled feeds do not enter the catalog and have the same 404 contract as
+11. Disabled feeds do not enter the catalog and have the same 404 contract as
     unknown feed namespaces.
 
 This is eager startup loading, but it is deliberately failure-tolerant at the
@@ -440,6 +450,49 @@ departure records, and 565,093 grouped stop-time references.
 The `GtfsIndex` collections and returned views are immutable. There is no method
 that mutates or refreshes the snapshot.
 
+Stage 2A adds one derived `RaptorNetwork` without replacing either `GtfsIndex`.
+Its compact integer indexes cover every available feed in one deterministic
+global space, while the authoritative identity remains `FeedScopedId`. It
+retains:
+
+| Structure | Contents | Purpose |
+|---|---|---|
+| Stop list and ID map | References to Stage 1 `Stop` records plus compact integer indexes | Constant-time ID/index conversion |
+| Trip schedule list and ID map | One `RaptorTripSchedule` for every complete Stage 1 `Trip` | Compact per-trip times and original trip identity |
+| Trip patterns | Shared stop/access arrays plus indexes of compatible individual trips | Avoid repeating structural data during later scans |
+| Stop-to-pattern arrays | Sorted pattern indexes for every compact stop | Later marked-stop scans avoid visiting every pattern |
+| Feed contexts | References to each available `GtfsFeed` and `GtfsIndex` | Preserve timezone, calendars, and Stage 1 ownership |
+
+Each trip schedule deliberately adds three private integer arrays: original
+stop sequences, arrivals, and departures. A private `-1` sentinel represents
+an intermediate row whose arrival and departure were both absent; public APIs
+expose that as `OptionalInt.empty()`. No time is interpolated. Pattern arrays
+share compact stop indexes and pickup/drop-off semantics among compatible
+trips. None of these arrays are exposed mutably.
+
+The exact pattern key is `(routeId, directionId, ordered FeedScopedId stops,
+ordered pickup types, ordered drop-off types)`. Route and direction are
+included to preserve branded/directional service boundaries and leave room for
+future route policy, not to create agency-specific routing. Because stop and
+route IDs were already namespaced by Stage 1, raw MTA/LIRR ID collisions need
+no special Stage 2 rule.
+
+Within a structural pattern, trips are ordered by first departure and trip ID.
+If a later-departing trip moves ahead at any later known arrival or departure,
+the builder deterministically partitions the schedules into multiple
+non-overtaking patterns. Missing/missing intermediate positions are ignored for
+that comparison because no ordering fact exists there. This favors a simple,
+safe later scanner over silently assuming that real timetables never overtake.
+
+ID-to-index lookup is expected `O(1)`; compact index-to-entity lookup is
+`O(1)`; and finding the patterns serving a stop is `O(Ps)` to return its `Ps`
+precomputed pattern indexes. Construction sorts global stops/trips and each
+structural timetable. The deterministic overtaking partition is intentionally
+simple and can be quadratic in the number of trips inside one structural
+pattern times its stop count; the frozen combined build currently completes in
+well under a second, so Stage 2A keeps the clearer policy and records this as a
+future scaling consideration.
+
 ## A concrete row from file to JSON
 
 Consider this synthetic row:
@@ -582,11 +635,13 @@ SPRINTWISE_LIRR_GTFS_PATH=../data/gtfs/lirr \
 mvn spring-boot:run
 ```
 
-`TransitFeedCatalog` is a multi-feed **container**, but there is deliberately no
-combined MTA+LIRR `GtfsIndex`. It does not infer that equally named or nearby
-stops correspond, and it does not create transfers. Feed-namespaced IDs let
-both datasets coexist without collisions; station matching and cross-feed
-routing remain later work.
+`TransitFeedCatalog` remains a multi-feed **container**, and there is still no
+merged MTA+LIRR `GtfsIndex`. Stage 2A builds one composite derived
+`RaptorNetwork` over the available entries so the same future scanner can treat
+all SprintWise trips uniformly. It does not infer that equally named or nearby
+stops correspond, and pattern grouping does not create transfers. Feed-scoped
+IDs let both datasets coexist without collisions; station matching and
+cross-feed routing remain later work.
 
 ### OTP's separate view
 
@@ -633,10 +688,11 @@ test consumes it beyond fixture-integrity checks.
 ### Journey lifecycle
 
 There is no actual journey object or journey lifecycle yet. There are no
-`Journey`, `Leg`, `Itinerary`, `Label`, `Raptor`, `FootpathService`, or `/plan`
-production types. The only resolved transit event is a single departure from a
-single stop. Stage 2 is expected to introduce ride scanning and trip-pattern or
-compact RAPTOR-specific structures after human review of Stage 1.
+`Journey`, `Leg`, `Itinerary`, `Label`, round scanner, `FootpathService`, or
+`/plan` production types. The only resolved transit event is still a single
+departure from a single stop. Stage 2A supplies trip-pattern and compact
+RAPTOR-specific structures; Stage 2B must add query-time service selection and
+the first transit-round scan.
 
 ## Test-data lifecycles
 
@@ -672,6 +728,15 @@ snapshots into one `TransitFeedCatalog`, while retaining two feeds and two
 indexes. It verifies simultaneous known lookups, namespace isolation, combined
 memory use, and construction under `-Xmx2G`. Neither profile creates a transfer
 or combined route.
+
+### Composite RAPTOR-network integration
+
+The `real-mta-lirr-raptor-network` profile builds the derived Stage 2A index in
+its own `-Xmx2G` JVM. On the frozen snapshots it retains all 1,615 stops and
+22,764 individual trips, derives 737 structural patterns, and partitions 88
+overtaking structures into 860 final safe patterns. The most recent run took
+about 0.11 seconds and added approximately 10 MiB beyond the retained Stage 1
+catalog. The profile skips when either frozen directory is absent.
 
 ### Golden data
 
@@ -712,6 +777,7 @@ application architecture.
 | `backend/src/main/java/com/sprintwise/gtfs/time/` | GTFS service time/date/instant conversion |
 | `backend/src/main/java/com/sprintwise/model/` | Immutable SprintWise transit-domain records |
 | `backend/src/main/java/com/sprintwise/index/` | Immutable lookup structures and resolved departure types |
+| `backend/src/main/java/com/sprintwise/raptor/` | Composite compact RAPTOR network, trip patterns, and schedules; no search yet |
 | `backend/src/main/java/com/sprintwise/service/` | Application-lifetime catalog of independent feed/index snapshots or failures |
 | `backend/src/main/resources/` | Runtime Spring configuration |
 | `backend/src/test/` | Backend test code and test-only data |
@@ -724,6 +790,7 @@ application architecture.
 | `backend/src/test/java/com/sprintwise/gtfs/calendar/` | Weekly and exception-calendar tests |
 | `backend/src/test/java/com/sprintwise/gtfs/time/` | Midnight, maximum-span, timezone, and DST tests |
 | `backend/src/test/java/com/sprintwise/index/` | Timetable index unit tests and real-feed memory integration test |
+| `backend/src/test/java/com/sprintwise/raptor/` | Composite pattern/index unit tests and isolated real-network measurement |
 | `backend/src/test/java/com/sprintwise/service/` | Multi-feed catalog, failure-isolation, and combined-real-feed tests |
 | `backend/src/test/resources/` | Test inputs copied onto the Maven test classpath |
 | `backend/src/test/resources/fixtures/` | Parent for owned synthetic fixtures |
@@ -764,7 +831,7 @@ application architecture.
 
 | File | What it does |
 |---|---|
-| `backend/pom.xml` | Defines Java/Spring/OneBusAway plus isolated MTA, LIRR, and combined-catalog real-data profiles |
+| `backend/pom.xml` | Defines Java/Spring/OneBusAway plus isolated MTA, LIRR, combined-catalog, and composite-RAPTOR real-data profiles |
 | `backend/src/main/resources/application.yml` | Sets port 8081 and independent MTA/LIRR paths and enabled flags |
 | `backend/src/main/java/com/sprintwise/SprintWiseApplication.java` | Spring Boot entry point and component-scan root |
 
@@ -773,7 +840,7 @@ application architecture.
 | File | What it does |
 |---|---|
 | `config/GtfsProperties.java` | Spring binding object for the list of feed IDs, paths, and enabled flags |
-| `config/TransitConfiguration.java` | Creates the parser-neutral loader and singleton `TransitFeedCatalog` |
+| `config/TransitConfiguration.java` | Creates the parser-neutral loader, singleton `TransitFeedCatalog`, and derived composite `RaptorNetwork` |
 | `service/TransitFeedCatalog.java` | Validates configuration, loads enabled feeds once, sorts entries, and dispatches feed/index access |
 | `service/TransitFeedEntry.java` | Immutable available feed/index pair or retained unavailable-feed state, including construction timing |
 | `service/UnknownFeedException.java` | Signals the documented unknown-or-disabled feed contract |
@@ -821,6 +888,17 @@ application architecture.
 | `index/TimetableDeparture.java` | Departure resolved to a concrete service date and `Instant` |
 | `index/GtfsIndexStats.java` | Counts major index structures for logging and measurement |
 
+### RAPTOR timetable index
+
+| File | What it does |
+|---|---|
+| `raptor/RaptorNetworkBuilder.java` | Deterministically assigns compact IDs, derives structural patterns, and partitions overtaking timetables |
+| `raptor/RaptorNetwork.java` | Immutable composite lookup surface for available feeds, stops, trips, patterns, and stop-to-pattern mappings |
+| `raptor/RaptorFeedContext.java` | Retains references to one feed's immutable Stage 1 feed/index and explicit timezone context |
+| `raptor/RaptorTripPattern.java` | Shared route/direction/stop/access structure and one non-overtaking group of trip indexes |
+| `raptor/RaptorTripSchedule.java` | One complete individual trip with private compact sequence/arrival/departure arrays |
+| `raptor/RaptorNetworkStats.java` | Counts feeds, compact entities, patterns, overtaking partitions, and stored positions |
+
 ### Debug HTTP layer
 
 | File | What it does |
@@ -846,6 +924,8 @@ application architecture.
 | `index/GtfsIndexTest.java` | Deterministic entity order, daytime/after-midnight/49-hour lookup, calendar filtering, tie-breaking, empty contracts, and immutability |
 | `service/TransitFeedCatalogTest.java` | Two-feed collisions, ordering, immutability, one-time loading, disabled feeds, and failure isolation |
 | `service/CombinedFrozenFeedsCatalogIT.java` | Simultaneous frozen MTA/LIRR indexes fit under 2 GiB and preserve namespace isolation |
+| `raptor/RaptorNetworkTest.java` | Composite namespacing, grouping, complete trips, missing times, access differences, immutability, and overtaking partitions |
+| `raptor/CompositeRaptorNetworkIT.java` | Frozen MTA/LIRR composite pattern index fits under `-Xmx2G` and retains every Stage 1 trip |
 | `debug/DebugControllerTest.java` | All debug endpoints and their 400/404/503 JSON contracts using synthetic production loading |
 | `index/RealMtaIndexSizeIT.java` | Frozen MTA fits under `-Xmx2G` and reports entity, time, heap, and duplication measurements |
 | `index/RealLirrStage1CompatibilityIT.java` | Frozen LIRR loader/index compatibility, extended-time behavior, references, and memory measurements |
@@ -932,6 +1012,10 @@ permanent architecture.
 - Index collections are immutable after one-time construction.
 - Fatal feed corruption never silently produces a partial timetable.
 - Synthetic and frozen-real tests use the same production loader/index path.
+- The RAPTOR index derives from Stage 1 objects; it does not reinterpret GTFS.
+- Compact indexes retain exact `FeedScopedId` identity across all feeds.
+- Every RAPTOR trip schedule still represents one complete Stage 1 trip.
+- Every exposed RAPTOR collection is immutable and internal arrays stay private.
 - Debug controllers inspect data but contain no routing algorithm.
 - The frozen source files are not mutated by normal startup or tests.
 
@@ -940,7 +1024,8 @@ permanent architecture.
 - Human review of Stage 1 is still pending.
 - MTA and LIRR coexist, but there is no station-correspondence model or
   cross-feed transfer/routing logic.
-- No trip-pattern or compact integer/array RAPTOR index exists yet.
+- Trip patterns exist, but no RAPTOR label, round scan, backtrace, or journey
+  result exists yet.
 - Pickup/drop-off semantics are retained but not applied to a routing decision.
 - Pickup/drop-off fields are not present in current trip debug JSON.
 - Missing intermediate times are not interpolated.
@@ -952,5 +1037,6 @@ permanent architecture.
 - GraphHopper and all walking/sprinting logic are still absent.
 - The frontend is only a package placeholder.
 
-Stage 2 should begin only after the pending human review is completed or its
-remaining risks are consciously accepted.
+Stage 2A is implemented. Stage 2B should add query-time per-feed service
+contexts and one-round transit scanning without introducing walking or
+transfers.

@@ -267,12 +267,12 @@ Each phase: **goal → build → done when → explicitly defer**.
 ### Phase 1 — GTFS index (Java)
 
 **Implementation status:** Stage/Phase 1, including Stage 1E independent MTA
-and LIRR loading, is implementation-complete, pending human review. A
-computerized Stage 1 review was performed; its remaining
+and LIRR loading, is implementation-complete. A closer human review remains
+recommended. A computerized Stage 1 review was performed; its remaining
 timetable-foundation findings (pickup/drop-off semantics, comprehensive
 stop-time validation, and feed-derived maximum-trip-span handling) have been
-resolved. Do not begin Stage 2 until the pending human review is complete or
-its remaining risks are explicitly accepted.
+resolved. Stage 2A was subsequently authorized and implemented without
+changing those Stage 1 guarantees.
 
 **Goal:** Load and index transit data; no routing yet.
 
@@ -330,10 +330,10 @@ its remaining risks are explicitly accepted.
 - Next departures from a known stop match OTP or a GTFS viewer
 - Weekday vs weekend service filtering works
 
-**Defer:** Trip-pattern construction and compact integer/array RAPTOR indexes
-to the beginning of Stage 2, along with the RAPTOR ride scan itself. Also defer
-GraphHopper and sprint behavior. Stage 1 preserves and validates the full
-ordered trips and access semantics those later structures will consume.
+**Stage 1 handoff:** Stage 2A now consumes the full ordered trips and access
+semantics to build trip patterns and compact integer/array indexes. RAPTOR
+labels, ride scanning, backtrace, GraphHopper, and sprint behavior remain
+deferred.
 
 **Suggested AI prompt:** *Implement GTFS loader + timetable index for MTA subway only. Add debug REST endpoints and tests for three known stop IDs.*
 
@@ -343,9 +343,41 @@ ordered trips and access semantics those later structures will consume.
 
 **Goal:** Correct round-based transit search on a tiny stop set.
 
+**Stage 2A implementation status:** The immutable timetable foundation is
+implemented. One composite `RaptorNetwork` is derived from every available
+Stage 1 catalog entry; it uses one global compact index space while preserving
+authoritative `FeedScopedId` identities and references to each feed's Stage 1
+calendar/time context. It does not merge or mutate the source `GtfsFeed`
+objects and contains no routing labels, rounds, transfers, or endpoints.
+
+Stage 2A inherits rather than reimplements Stage 1 namespacing, complete-trip
+preservation, stop-time validation, pickup/drop-off values, extended times,
+calendars, timezones, and failure isolation.
+
+Trip-pattern key:
+
+- `routeId`
+- `directionId`
+- complete ordered `FeedScopedId` stop sequence
+- complete ordered pickup-type sequence
+- complete ordered drop-off-type sequence
+
+Route and direction remain in the key to preserve service/directional
+boundaries for future policy. Feed separation needs no extra rule: Stage 1
+already namespaced every route and stop ID. Pattern grouping shares structure
+only; each `trip_id` remains an individually indexed complete schedule.
+
+Trips in a structural pattern are sorted by first departure and stable trip ID.
+If a later trip overtakes an earlier one at any comparable known arrival or
+departure, deterministic greedy chain partitioning creates multiple
+non-overtaking timetable patterns. Both-missing intermediate times remain a
+private missing sentinel exposed as empty optional values; Stage 2A performs no
+interpolation.
+
 **Build:**
 
-- Config-limited corridor (e.g. one subway line, 20–50 stops)
+- Stage 2B onward: exercise a small fixed-stop network with at least two useful
+  patterns; do not embed a one-line corridor restriction into the reusable core
 - Classic RAPTOR: mark stops → scan trips → extend labels → repeat
 - Journey backtrace → `(boardStop, tripId, alightStop, times)`
 - `POST /debug/raptor` with `{ fromStopId, toStopId, departAt }`
@@ -391,9 +423,9 @@ ordered trips and access semantics those later structures will consume.
 **Build:**
 
 - Replace single best label per stop with **bags**; criteria: `(arrivalTime, numTransfers)` or `(arrivalTime, totalWalkSec)`
-- Consume the independent MTA and LIRR indexes from `TransitFeedCatalog`;
-  cross-feed station correspondence and transfer edges must be designed
-  explicitly rather than merging the source feeds
+- Consume the composite `RaptorNetwork` derived from the independent MTA and
+  LIRR catalog entries; cross-feed station correspondence and transfer edges
+  must be designed explicitly rather than merging the source feeds
 - `maxRounds` / max transfers cap
 - Target prune on best complete arrival at `END`
 
